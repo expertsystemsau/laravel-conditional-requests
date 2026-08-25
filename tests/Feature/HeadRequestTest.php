@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+use ExpertSystems\ConditionalRequests\Http\Middleware\Conditional;
+use Illuminate\Contracts\Http\Kernel;
 use Illuminate\Support\Facades\Route;
 
 beforeEach(function (): void {
@@ -42,10 +44,9 @@ it('sends no body on a HEAD request', function (): void {
 });
 
 it('sends no body on a HEAD request the middleware skips', function (): void {
-    // An ineligible response never reaches the validator, but it must still
-    // leave the middleware with an empty body: under global placement nothing
-    // downstream re-prepares it, so the middleware's own nulling is the only
-    // thing standing between a HEAD request and a full payload.
+    // Under route placement Router::runRoute()'s own prepareResponse would empty
+    // this anyway, so this asserts the outcome rather than guarding the fix. The
+    // global-placement case below is the one that regresses without it.
     config()->set('laravel-conditional-requests.exclude', ['internal/*']);
 
     Route::middleware('conditional')->get('/internal/metrics', fn () => response('metrics payload'));
@@ -54,6 +55,21 @@ it('sends no body on a HEAD request the middleware skips', function (): void {
 
     expect($response->getContent())->toBe('')
         ->and($response->headers->get('ETag'))->toBeNull();
+});
+
+it('sends no body on a HEAD request to an ineligible response under global placement', function (): void {
+    // The request method is mutated to GET before $next(), so both of the
+    // router's prepareResponse() calls see a GET and neither empties the body.
+    // The middleware's own nulling is the only thing between a HEAD request and
+    // a full payload here, which is why every exit has to route through it.
+    app(Kernel::class)->pushMiddleware(Conditional::class);
+
+    Route::get('/pre-tagged', fn () => response('ineligible payload')->setEtag('application-owned'));
+
+    $response = $this->head('/pre-tagged');
+
+    expect($response->getContent())->toBe('')
+        ->and($response->headers->get('ETag'))->toBe('"application-owned"');
 });
 
 it('gives an error response no validator and no body on a HEAD request', function (): void {
