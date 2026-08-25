@@ -108,6 +108,9 @@ Or change the default for every route in `config/laravel-conditional-requests.ph
 
 A flag always wins over the config key.
 
+> [!NOTE]
+> Neither key is validated at boot. A `strategy` that names nothing registered, or a `hash` that `hash()` does not know, is a `500` on every request that reaches an eligible route — `Conditional request strategy [nope] is not registered. Registered: body, model`, and `Hash algorithm [nope] is not supported.` Both messages name the key at fault, and routes that name a valid strategy by flag keep working, but a typo in a published config file arrives in production as an outage across every conditional route rather than as a quiet loss of caching. Flag matching is case-sensitive too: `conditional:MODEL` is not `conditional:model`, and asks the registry for a strategy of that name.
+
 > [!WARNING]
 > `required` and `lock` are reserved words rather than strategy names, and both already select `model` today — that much is live, even though the write path they belong to is not. Putting `conditional:required` on a `GET` route ahead of `v0.3` therefore switches it from `body` to `model`, turning on the pre-controller short-circuit and [the authorization hazard that comes with it](#model-derived-validators) — and on a route whose bound model does not implement `ProvidesConditionalValidator`, leaving it with no `ETag` at all.
 
@@ -153,6 +156,9 @@ If-None-Match: "9b1c0e0f6b0a4f9d"
 > [!NOTE]
 > One entry point into that hazard is closed here rather than left to you. `If-None-Match: *` matches *any* validator, so it needs no tag and no prior access — and behind a gate declared after `conditional` the status code alone would then separate the records that exist from the ones that do not, for every id, with the gate never entered. A bare wildcard therefore never short-circuits: the controller and everything after `conditional` run, and the `304` is decided at the end exactly as it is under `body`. A wildcard sent *alongside* a tag that does match is a client demonstrably holding the current version, and still short-circuits. This closes one entry point, not the hazard — the rule above stands unchanged.
 
+> [!WARNING]
+> A middleware the short-circuit skipped still has its `terminate()` called. `Kernel::terminateMiddleware()` calls `terminate()` on everything the route gathered, whether or not that middleware's `handle()` ever ran — so a terminable middleware declared after `conditional` runs its teardown against state its setup never created. A request timer subtracts from a `null` start and reports the epoch; a metric emitter closes a span it never opened; a log context is popped that was never pushed; a buffer is flushed that was never filled. Under Octane it is worse than `null`: the worker still holds whatever the *previous* request left in that property. The asymmetry is the trap — the middleware after `conditional` do not run on a hit, but their `terminate()` does. Nothing here can change that, because as far as the kernel is concerned the middleware was on the route. Declare terminable middleware **outside** `conditional`, where both halves run as usual.
+
 The default tag fingerprints where the record lives — the connection's database name, the connection's table prefix, and the table — together with its key and its version: an explicit `version` column when the model has one, otherwise the raw `updated_at` value. Location is in there so that two records with the same id, in different tables or in different tenants' databases, can never share a tag. A record with no version at all — one that has never been saved — produces no validator, and the response is left untouched.
 
 > [!WARNING]
@@ -168,6 +174,11 @@ Model-derived validators are **strong**. RFC 9110 §13.1.1 requires strong compa
 
 > [!NOTE]
 > A short-circuited `304` cannot carry headers your controller or downstream middleware would have set — an application `Cache-Control`, `Vary`, `Content-Location`, and the like never run on a hit, because nothing that would set them does. RFC 9110 §15.4.5 says a `304` *should* carry them. The long way round — controller runs, `304` decided afterwards — carries them exactly as before; only the pre-controller short-circuit skips them.
+>
+> For `Cache-Control` the header is not merely absent, which matters more than it sounds. The short-circuited response is a fresh Laravel `Response`, so it leaves carrying the framework default, `no-cache, private`, and RFC 9111 §4.3.4 has a cache replace the header fields it stored with the ones on the `304`. A `public, max-age=60` entry is therefore downgraded to `private` — out of every shared cache — and marked `no-cache`, so it revalidates on every request from then on. The policy destroys itself the first time it succeeds. A middleware declared *before* `conditional` can still put the header back on the way out, but only if it sets headers unconditionally: Laravel's own `cache.headers` returns early for an empty response and again for one that is not `2xx`, so it will not.
+
+> [!WARNING]
+> A middleware declared *after* `conditional` that sets an `ETag` of its own turns `conditional:model` back into `body` semantics, silently. `cache.headers:public;max_age=60;etag` is the common one. It tags the response first, `conditional` honours the rule that an existing tag is left alone, and the route ends up advertising a body hash that the model short-circuit can never match — so the controller runs on every request, including the ones that answer `304`. You asked for the compute-saving strategy and got the bandwidth-only one, with nothing to say so. Stacking `conditional:model` outside `conditional:body` does the same thing, for the same reason. Pick one tag source per route.
 
 > [!WARNING]
 > When a route binds more than one conditional record, the **first** route parameter implementing the contract wins — parameters keep their declaration order, so on `/articles/{article}/comments/{comment}` the tag tracks the *article*, and editing the comment never moves it. On `/{tenant}/articles/{article}` it is worse: every article under that tenant shares one tag, the tenant's. First-wins is deliberate — deterministic beats clever, and the target never moves with runtime state — but it means you should implement `ProvidesConditionalValidator` only on the record the route actually represents, or override `conditionalValidator()` on the outer one to fold the inner record's version in.
@@ -266,6 +277,20 @@ Answering early also suppresses the streamed, binary, and size-ceiling checks fo
 
 > [!WARNING]
 > Every `RequestValidatorStrategy` carries the authorization caveat, not just `model`. Whenever `fromRequest()` answers and the client's tag matches, the `304` goes out before anything declared after `conditional` runs — `can:`, `signed`, subscription and feature gates, and any check inside the controller action. Place `conditional` after every middleware that can reject the request, and see the [`model` warning above](#model-derived-validators) for what that costs if you do not.
+
+### Middleware that rewrites the response
+
+A validator identifies one specific set of bytes, and this middleware computes it from the bytes it can see, where it sits. Anything that rewrites the body *after* that — an HTML minifier, a CSP-nonce injector, a CSRF token refresher, a debug bar, a response filter of any kind — leaves the tag describing bytes the client never received. Global middleware always run outside route middleware, so a global rewriter is always in that position; a route middleware declared before `conditional` is too.
+
+```http
+ETag: "d5bdba419a6ee56156a6005f54f6b73f"    nonce="ee6508f9fd94"
+ETag: "d5bdba419a6ee56156a6005f54f6b73f"    nonce="d2e555ab4bb1"
+ETag: "d5bdba419a6ee56156a6005f54f6b73f"    nonce="f73849aac055"
+```
+
+One strong tag, three different bodies. A client revalidating with it is told `304` every time, so it keeps the first nonce forever while the server goes on minting new ones — a CSP nonce frozen, or a stale CSRF token in every form on the page.
+
+Declare anything that rewrites the body **after** `conditional`, so the bytes are final before they are hashed. Under `model` the ordering does not help, because that tag never described the bytes to begin with: a per-response nonce or token is exactly what [the scoping section](#what-the-tag-is-scoped-to) says has to be folded into the tag by hand, or kept off a conditional route.
 
 ### Proxies and content coding
 
