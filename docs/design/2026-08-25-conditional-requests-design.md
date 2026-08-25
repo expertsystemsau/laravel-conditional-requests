@@ -69,6 +69,7 @@ Therefore:
 | `Http/Middleware/Conditional` | Single entry point. Dispatches on request method to read or write path. |
 | `Validators/Validator` | Value object: `etag`, `weak`, `lastModified`. |
 | `Validators/ValidatorStrategy` | Contract. Resolves a `Validator` from a request and/or response. |
+| `Contracts/RequestValidatorStrategy` | Contract, extends the above. Resolves a `Validator` from the request alone, which is what makes the pre-controller short-circuit possible. Shipped in v0.2; `ModelStrategy` is the only built-in implementation. |
 | `Validators/BodyHashStrategy` | Post-controller. `xxh128` over rendered content. Strong. |
 | `Validators/ModelStrategy` | Pre-controller. From a route-bound model. Strong. |
 | `Preconditions/PreconditionEvaluator` | Our own `If-Match` / `If-Unmodified-Since` evaluation, strong comparison. |
@@ -96,19 +97,24 @@ Flags, order-independent, comma-separated:
 
 ```
 if method not cacheable (GET/HEAD)          → fall through to write path
-if strategy is model and route has a bound model implementing the contract:
-    validator ← model validator
-    stub response with validator
-    if stub->isNotModified(request)          → return 304, controller never runs   [D3]
+if strategy implements RequestValidatorStrategy:
+    validator ← strategy->fromRequest(request)     # null when it cannot answer
+    if validator:
+        stub response with validator
+        if stub->isNotModified(request)      → return 304, controller never runs   [D3]
 response ← $next(request)
-if response not 2xx                          → return unchanged
-if streamed, binary, or already has an ETag  → return unchanged
-if content length > configured max           → return unchanged
-validator ← strategy validator from response
+if response not 2xx, or already has an ETag  → return unchanged
+if no validator yet:                             # then it has to come from the body
+    if streamed or binary                    → return unchanged
+    if content length > configured max       → return unchanged
+    validator ← strategy->fromResponse(request, response)
+    if no validator                          → return unchanged
 response->setEtag(...) / setLastModified(...)
 response->isNotModified(request)             → Symfony converts to a compliant 304
 return response
 ```
+
+The body-shaped skips are conditional on *not already holding* a validator, rather than on the strategy's interface. They exist only to avoid reading a body; a validator produced by `fromRequest()` demonstrably did not read one, so it clears them. A strategy that implements `RequestValidatorStrategy` but declines on this request has produced nothing, so `fromResponse()` faces them in full.
 
 ### 5.4 Write path
 

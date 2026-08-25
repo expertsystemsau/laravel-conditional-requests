@@ -33,13 +33,19 @@ return [
     | Hash Algorithm
     |--------------------------------------------------------------------------
     |
-    | Any algorithm accepted by hash(). This is a change-detection fingerprint
-    | rather than a security primitive, so the non-cryptographic xxh128 is the
-    | default for its throughput on large payloads. If response bodies carry
-    | attacker-influenced content and serving a stale representation matters,
-    | choose a cryptographic algorithm instead: xxh128 offers no collision
-    | resistance against a chosen input, so a crafted body can be made to
-    | collide with an earlier one and suppress the refresh.
+    | Any algorithm accepted by hash(), governing the "body" strategy — the only
+    | one that hashes attacker-reachable input. This is a change-detection
+    | fingerprint rather than a security primitive, so the non-cryptographic
+    | xxh128 is the default for its throughput on large payloads. If response
+    | bodies carry attacker-influenced content and serving a stale
+    | representation matters, choose a cryptographic algorithm instead: xxh128
+    | offers no collision resistance against a chosen input, so a crafted body
+    | can be made to collide with an earlier one and suppress the refresh.
+    |
+    | Model-derived tags do not read this key and do not need to. They hash a
+    | database name, a table prefix, a table, a primary key, and a version
+    | column — none of which a client chooses — so there is no input to craft a
+    | collision out of.
     |
     */
 
