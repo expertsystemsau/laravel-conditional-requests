@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use ExpertSystems\ConditionalRequests\Http\Middleware\Conditional;
 use Illuminate\Contracts\Http\Kernel;
+use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Route;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
@@ -59,10 +60,11 @@ it('sends no body on a HEAD request the middleware skips', function (): void {
 });
 
 it('sends no body on a HEAD request to an ineligible response under global placement', function (): void {
-    // The request method is mutated to GET before $next(), so both of the
-    // router's prepareResponse() calls see a GET and neither empties the body.
-    // The middleware's own nulling is the only thing between a HEAD request and
-    // a full payload here, which is why every exit has to route through it.
+    // Out here the middleware leaves the method alone, so the router's own
+    // prepareResponse() sees the HEAD and empties the body; the middleware's
+    // nulling arrives first and agrees with it. What this pins is the promise —
+    // a HEAD to an ineligible response sends no body and keeps the tag the
+    // application set — rather than which layer delivered it.
     app(Kernel::class)->pushMiddleware(Conditional::class);
 
     Route::get('/pre-tagged', fn () => response('ineligible payload')->setEtag('application-owned'));
@@ -75,9 +77,11 @@ it('sends no body on a HEAD request to an ineligible response under global place
 
 it('sends no body on a HEAD request to a file download under global placement', function (): void {
     // BinaryFileResponse::setContent(null) is a no-op; its body suppression
-    // comes from prepare() zeroing maxlen for a HEAD request, and the method
-    // mutation is what stops that happening. Without re-preparing here the
-    // whole file is streamed in answer to a HEAD.
+    // comes from prepare() zeroing maxlen for a HEAD request. Under route
+    // placement the controller saw a GET and the middleware has to re-prepare
+    // against the restored method to get that; out here nothing was mutated and
+    // the router prepared against the HEAD itself. Either way, a HEAD to a
+    // download must stream nothing.
     app(Kernel::class)->pushMiddleware(Conditional::class);
 
     $path = tempnam(sys_get_temp_dir(), 'crt');
@@ -97,6 +101,39 @@ it('sends no body on a HEAD request to a file download under global placement', 
     unlink($path);
 
     expect($body)->toBe('');
+});
+
+it('leaves the request method alone when nothing has been routed yet', function (): void {
+    // Under kernel-global placement the mutation would land before routing, so
+    // the router would go looking for a GET route. A middleware must not change
+    // what a request routes to, however rare the arrangement that notices.
+    app(Kernel::class)->pushMiddleware(Conditional::class);
+
+    Route::match(['HEAD'], '/head-only', fn (): string => 'head-only payload');
+
+    $response = $this->head('/head-only');
+
+    expect($response->status())->toBe(200)
+        ->and($response->getContent())->toBe('')
+        // What it costs: Router::prepareResponse() empties the body for the
+        // HEAD it can now see, and BodyHashStrategy declines to hash an empty
+        // one, so the response goes untagged. That is the degradation `model`
+        // already takes at this position, and the cheaper of the two.
+        ->and($response->headers->get('ETag'))->toBeNull();
+});
+
+it('routes a HEAD to the HEAD action beside a GET one on the same URI', function (): void {
+    // The quieter half of the same mutation: no error, just the wrong action.
+    // Route::get() registers a HEAD entry of its own, and RouteCollection keys
+    // one route per method and URI, so the HEAD declaration has to come second
+    // to hold that slot — which it does, until the method is rewritten out from
+    // under the router.
+    app(Kernel::class)->pushMiddleware(Conditional::class);
+
+    Route::get('/both', fn (): Response => response('payload', 200, ['X-Action' => 'get']));
+    Route::match(['HEAD'], '/both', fn (): Response => response('', 200, ['X-Action' => 'head']));
+
+    expect($this->head('/both')->headers->get('X-Action'))->toBe('head');
 });
 
 it('gives an error response no validator and no body on a HEAD request', function (): void {

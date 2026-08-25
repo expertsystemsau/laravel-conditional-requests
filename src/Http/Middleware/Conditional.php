@@ -65,7 +65,17 @@ final readonly class Conditional
 
         $originalMethod = $request->getMethod();
         $isHead = $originalMethod === 'HEAD';
-        $mutate = $isHead && ! ($validator instanceof Validator);
+
+        // Never before routing. Under kernel-global placement the mutation
+        // would land ahead of the router, which would then go looking for a
+        // GET route: a route registered for HEAD alone answers 405, and a HEAD
+        // to a URI carrying both actions reaches the GET one. A middleware must
+        // not change what a request routes to, so the body hash is what gives
+        // way out here — Router::prepareResponse() empties the body for the
+        // HEAD it can now see and BodyHashStrategy declines to hash an empty
+        // one, leaving the response untagged. That is the degradation `model`
+        // already takes at this position.
+        $mutate = $isHead && ! ($validator instanceof Validator) && $request->route() !== null;
 
         // Router::runRouteWithinStack()'s pipeline destination is
         // prepareResponse() (Router.php:821), which runs before route middleware
@@ -94,9 +104,12 @@ final readonly class Conditional
             $this->attach($request, $response, $strategy, $validator);
         }
 
-        // Single exit, so every path applies the HEAD nulling. Under route or
-        // group placement Router::runRoute()'s own prepareResponse (Router.php:799)
-        // would do it again harmlessly; under global placement nothing else does.
+        // Single exit, so every path applies the HEAD nulling. Belt and braces
+        // against the router, which empties a HEAD body itself in
+        // Router::runRoute()'s prepareResponse (Router.php:799) — but that runs
+        // after every route middleware, and this runs before them, so nothing
+        // declared outside `conditional` ever sees a HEAD response still
+        // carrying the body the controller wrote.
         return $isHead ? $this->withoutBody($request, $response) : $response;
     }
 

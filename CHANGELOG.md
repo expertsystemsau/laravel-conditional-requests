@@ -25,6 +25,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ### Fixed
 
 - A `304` the middleware produces is now prepared, so it leaves without a `Content-Type`. Symfony's `Response::prepare()` clears PHP's `default_mimetype` for an empty response, and that is what stops the SAPI adding one; under route or group placement `Router::prepareResponse()` ran afterwards and did it, but under kernel-global placement nothing re-prepared and the `304` went out as `text/html; charset=UTF-8`. RFC 9111 §4.3.4 has a cache update its stored headers from the `304`, so a client holding an `application/json` entry had its stored content type overwritten on the first successful revalidation.
+- The `HEAD`-to-`GET` mutation no longer happens before the request has been routed. Under kernel-global placement it landed ahead of the router, which then went looking for a `GET` route: a route registered for `HEAD` alone answered `405`, and a `HEAD` to a URI carrying both a `GET` and a `HEAD` action reached the `GET` one. A `HEAD` at that position now goes untagged instead — the router empties its body before the middleware can hash it — which is the same degradation the `model` strategy already takes there, and preferable to a middleware quietly changing what a request routes to.
 
 ## v0.1.0
 
