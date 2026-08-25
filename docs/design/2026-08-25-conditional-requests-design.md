@@ -181,7 +181,7 @@ return [
 
 ## 7. Edge cases to cover
 
-- `HEAD` requests must produce the same validator as the equivalent `GET`.
+- `HEAD` requests must produce the same validator as the equivalent `GET`. For the body-hash strategy this requires a workaround: by the time route middleware regains control, Symfony's `Response::prepare()` has already nulled the body for `HEAD`, so the request method is mutated to `GET` around the controller call and restored afterwards, with the response body re-emptied once the validator is attached. Model-derived validators (`v0.4`) read the record's version instead of the rendered body, so they will not need this.
 - Responses already carrying an ETag (set by the application) are left alone.
 - `StreamedResponse` and `BinaryFileResponse` are skipped — hashing them means buffering them.
 - Empty-body 2xx responses (`204`) get no validator.
@@ -210,7 +210,7 @@ Pest 4/5 with Orchestra Testbench, exercising real routes registered in `workben
 
 | Version | Scope |
 | --- | --- |
-| `v0.1` | Read path, body hash, `If-None-Match` → 304 |
+| `v0.1` | Read path, body hash, `If-None-Match` → 304 — **shipped** |
 | `v0.2` | Write path, `If-Match` → 412, `required` → 428 |
 | `v0.3` | `Last-Modified` / `If-Modified-Since` / `If-Unmodified-Since` |
 | `v0.4` | Model-derived validators and pre-controller short-circuit |
@@ -236,7 +236,7 @@ Verified by reading the incumbent's source at `365Werk/etagconditionals@main`, n
 | `If-None-Match` → `304` | `ifNoneMatch` middleware | Read path via Symfony `isNotModified()` |
 | `If-Match` → `412` | `ifMatch` middleware | Write path, `PreconditionEvaluator` |
 | Custom ETag generator | `etagGenerateUsing()` closure | Strategy contract, swappable per route |
-| `HEAD` handled as `GET` | Method mutate/restore | Native, no request mutation |
+| `HEAD` handled as `GET` | Method mutate/restore | Method mutate/restore, required by the same `Response::prepare()` ordering werk365 works around |
 | Middleware group alias | `etag` group | `conditional` with flags |
 | Octane support | `app()->instance('request', …)` fixup | No shared state to fix up |
 

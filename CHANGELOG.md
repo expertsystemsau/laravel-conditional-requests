@@ -4,12 +4,18 @@ All notable changes to `laravel-conditional-requests` are documented in this fil
 
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased](https://github.com/expertsystemsau/laravel-conditional-requests/commits/main)
+## [Unreleased](https://github.com/expertsystemsau/laravel-conditional-requests/compare/v0.1.0...main)
+
+## v0.1.0
 
 ### Added
 
-- Initial package skeleton, CI matrix (PHP 8.3–8.5, Laravel 12–13), and project documentation.
+- `conditional` route middleware attaching an `ETag` to eligible responses.
+- `304 Not Modified` short-circuiting on `If-None-Match`, including tag lists and the bare `*` wildcard.
+- Swappable validator strategies with a `body` hash default, registered through `ConditionalRequests::extend()`.
+- Configurable hash algorithm, weak validators, eligible methods, response size ceiling, and route exclusions.
+- Eligibility rules skipping streamed, binary, unsuccessful, oversized, and already-tagged responses.
 
 ### Notes
 
-- No release has been tagged yet. The conditional request middleware is in development — see the [roadmap](README.md#roadmap).
+- The write path, the `Last-Modified` family, model-derived validators, and locking are not implemented yet.

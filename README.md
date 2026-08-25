@@ -24,7 +24,7 @@ Most Laravel packages in this space only do the first half, and only via ETag. T
 ## Status
 
 > [!WARNING]
-> **Pre-release — under active development.** The package skeleton, CI, and support matrix are in place; the middleware described under [Usage](#usage) is the design contract being built against and is **not implemented yet**. Nothing here is stable until `v1.0.0`. Watch the repo or the [changelog](CHANGELOG.md) for progress.
+> **Pre-release — under active development.** The read path described below ships and is tested. The write path (`conditional:required`, `412`, `428`), the `Last-Modified` family, model-derived validators, and locking are not implemented yet — they are marked on the [roadmap](#roadmap) below. Nothing is stable until `v1.0.0`.
 
 ## Requirements
 
@@ -59,9 +59,6 @@ php artisan vendor:publish --tag="laravel-conditional-requests-assets"
 
 ## Usage
 
-> [!NOTE]
-> This section documents the **intended API**. It is the design contract for `v1.0.0` and is not yet implemented — see [Status](#status).
-
 ### Conditional reads
 
 Apply the middleware to any route that returns a cacheable representation. The response gets a validator attached, and matching subsequent requests short-circuit to `304 Not Modified` with an empty body.
@@ -80,6 +77,15 @@ GET /articles/42
 If-None-Match: "d41d8cd98f00b204"
 → 304 Not Modified          # no body, no serialization
 ```
+
+> [!NOTE]
+> If a response already carries an `ETag` — set by your own application code — the middleware leaves it completely alone: your tag is preserved, and that response never takes part in `304` handling.
+
+> [!NOTE]
+> A `HEAD` request is handed to your controller as a `GET` while the validator is computed, so it gets the same `ETag` and can still trigger a `304`; the body is emptied again before the response goes out. In practice this is invisible, since Laravel already routes `HEAD` to the `GET` action — but controller code that inspects `$request->method()` or `isMethod('HEAD')` will see `GET` for the duration of that call.
+
+> [!NOTE]
+> Everything below this line is the design contract for a later release and is **not implemented yet**.
 
 ### Conditional writes (lost update protection)
 
@@ -118,13 +124,13 @@ PATCH /articles/42
 
 ## Roadmap
 
-- [ ] `conditional` middleware — response validators and `304` short-circuiting
+- [x] `conditional` middleware — response validators and `304` short-circuiting
+- [x] Configurable exclusions — methods, status codes, routes, and response sizes
 - [ ] `conditional:required` middleware — `If-Match` enforcement with `412` / `428`
-- [ ] Strong and weak ETag generation, with a configurable strategy
+- [x] Strong and weak ETag generation, with a configurable strategy
 - [ ] `Last-Modified` / `If-Modified-Since` support alongside ETags
 - [ ] Model-derived validators, so an ETag comes from the record's version rather than a hash of the rendered body
 - [ ] Eloquent API Resource and resource collection support
-- [ ] Configurable exclusions — methods, status codes, routes, and response sizes
 - [ ] Laravel Octane safety, with no validator state leaking between requests
 - [ ] Migration notes for projects coming from `werk365/etagconditionals`
 
