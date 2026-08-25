@@ -14,6 +14,30 @@ it('skips every response when disabled', function (): void {
     $this->get('/articles')->assertHeaderMissing('ETag');
 });
 
+it('hands the controller an untouched request when disabled', function (): void {
+    config()->set('laravel-conditional-requests.enabled', false);
+
+    $seen = null;
+
+    Route::middleware('conditional')->get('/articles', function () use (&$seen) {
+        $seen = request()->method();
+
+        return response('body');
+    });
+
+    $this->head('/articles');
+
+    expect($seen)->toBe('HEAD');
+});
+
+it('treats a truthy non-boolean enabled value as enabled', function (): void {
+    config()->set('laravel-conditional-requests.enabled', 1);
+
+    Route::middleware('conditional')->get('/articles', fn (): array => ['title' => 'Hello']);
+
+    $this->get('/articles')->assertHeader('ETag');
+});
+
 it('skips responses that are not successful', function (): void {
     Route::middleware('conditional')->get('/missing', fn () => response('gone', 404));
 

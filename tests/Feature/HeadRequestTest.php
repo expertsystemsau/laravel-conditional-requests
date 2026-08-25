@@ -31,3 +31,18 @@ it('keeps the ETag on a 304 so the client can refresh its cache entry', function
 it('sends no body on a HEAD request', function (): void {
     expect($this->head('/articles')->getContent())->toBe('');
 });
+
+it('sends no body on a HEAD request the middleware skips', function (): void {
+    // An ineligible response never reaches the validator, but it must still
+    // leave the middleware with an empty body: under global placement nothing
+    // downstream re-prepares it, so the middleware's own nulling is the only
+    // thing standing between a HEAD request and a full payload.
+    config()->set('laravel-conditional-requests.exclude', ['internal/*']);
+
+    Route::middleware('conditional')->get('/internal/metrics', fn () => response('metrics payload'));
+
+    $response = $this->head('/internal/metrics');
+
+    expect($response->getContent())->toBe('')
+        ->and($response->headers->get('ETag'))->toBeNull();
+});

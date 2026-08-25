@@ -28,13 +28,21 @@ final readonly class Conditional
      */
     public function handle(Request $request, Closure $next, string ...$flags): Response
     {
+        // Everything that can be decided from the request alone is decided here,
+        // before the request is touched, so `enabled => false` really is a
+        // pass-through and the controller sees the method the client sent.
+        if (! $this->requestEligible($request)) {
+            return $next($request);
+        }
+
         $originalMethod = $request->getMethod();
         $isHead = $originalMethod === 'HEAD';
 
-        // For route middleware, prepareResponse() already ran by the time $next()
-        // returns, and Symfony's Response::prepare() has already nulled the body
-        // for HEAD. Present the request to the controller as a GET so there is a
-        // body left to hash, then re-empty the response ourselves afterwards.
+        // Router::runRouteWithinStack()'s pipeline destination is
+        // prepareResponse() (Router.php:821), which runs before route middleware
+        // regains control, and Symfony's Response::prepare() nulls the body for
+        // HEAD there. Present the request to the controller as a GET so there is
+        // a body left to hash, then re-empty the response ourselves afterwards.
         if ($isHead) {
             $request->setMethod('GET');
         }
@@ -47,16 +55,33 @@ final readonly class Conditional
             }
         }
 
-        if (! $this->eligible($request, $response)) {
-            return $response;
+        if ($this->eligible($response)) {
+            // array_values() looks like a no-op and is one at runtime, but PHPStan
+            // types a `string ...$flags` variadic as array<int<0,max>|string,
+            // string> — a variadic can receive named arguments — so it is needed
+            // to satisfy the list<string> parameter below. Do not remove it.
+            $this->attach($request, $response, array_values($flags));
         }
 
+        // Single exit, so every path applies the HEAD nulling. Under route or
+        // group placement Router::runRoute()'s own prepareResponse (Router.php:799)
+        // would do it again harmlessly; under global placement nothing else does.
+        return $isHead ? $this->withoutBody($response) : $response;
+    }
+
+    /**
+     * Attach a validator and let Symfony decide whether it is still current.
+     *
+     * @param  list<string>  $flags
+     */
+    private function attach(Request $request, Response $response, array $flags): void
+    {
         $validator = $this->registry
-            ->strategy($this->strategyName(array_values($flags)))
+            ->strategy($this->strategyName($flags))
             ->fromResponse($request, $response);
 
         if (! $validator instanceof Validator) {
-            return $response;
+            return;
         }
 
         $response->setEtag($validator->etag, $validator->weak);
@@ -64,14 +89,21 @@ final readonly class Conditional
         // Symfony performs the RFC 9110 comparison and, on a match, mutates the
         // response into a compliant 304 — status, empty body, stripped headers.
         $response->isNotModified($request);
+    }
 
-        if ($isHead) {
-            $length = $response->headers->get('Content-Length');
-            $response->setContent(null);
+    /**
+     * Empty a response body while preserving the length it advertised.
+     *
+     * Mirrors what Symfony's Response::prepare() does for a HEAD request.
+     */
+    private function withoutBody(Response $response): Response
+    {
+        $length = $response->headers->get('Content-Length');
 
-            if ($length !== null) {
-                $response->headers->set('Content-Length', $length);
-            }
+        $response->setContent(null);
+
+        if ($length !== null) {
+            $response->headers->set('Content-Length', $length);
         }
 
         return $response;
@@ -79,6 +111,10 @@ final readonly class Conditional
 
     /**
      * The first flag naming a strategy wins; otherwise fall back to config.
+     *
+     * @todo v0.2 must rewrite this. Design §5.2 makes flags order-independent,
+     *   with `required` and `lock` implying `model`, so a flag is not always a
+     *   strategy name and the first one is not necessarily the strategy.
      *
      * @param  list<string>  $flags
      */
@@ -90,23 +126,18 @@ final readonly class Conditional
             }
         }
 
-        return (string) $this->config->get('laravel-conditional-requests.strategy', 'body');
+        return (string) $this->config->get('laravel-conditional-requests.strategy');
     }
 
     /**
-     * Whether this request and response should take part in the read path.
+     * Whether this request should take part in the read path at all.
+     *
+     * Request-shaped only: no response is needed, which is what lets it run
+     * before the controller and, in v0.4, gate the pre-controller short-circuit.
      */
-    private function eligible(Request $request, Response $response): bool
+    private function requestEligible(Request $request): bool
     {
-        if ($this->config->get('laravel-conditional-requests.enabled', true) !== true) {
-            return false;
-        }
-
-        if ($response instanceof StreamedResponse || $response instanceof BinaryFileResponse) {
-            return false;
-        }
-
-        if (! $response->isSuccessful() || $response->getEtag() !== null) {
+        if (! (bool) $this->config->get('laravel-conditional-requests.enabled')) {
             return false;
         }
 
@@ -114,7 +145,19 @@ final readonly class Conditional
             return false;
         }
 
-        if ($this->excluded($request)) {
+        return ! $this->excluded($request);
+    }
+
+    /**
+     * Whether this response can carry a validator.
+     */
+    private function eligible(Response $response): bool
+    {
+        if ($response instanceof StreamedResponse || $response instanceof BinaryFileResponse) {
+            return false;
+        }
+
+        if (! $response->isSuccessful() || $response->getEtag() !== null) {
             return false;
         }
 
@@ -124,7 +167,7 @@ final readonly class Conditional
             return false;
         }
 
-        $ceiling = (int) $this->config->get('laravel-conditional-requests.max_response_bytes', 1_048_576);
+        $ceiling = (int) $this->config->get('laravel-conditional-requests.max_response_bytes');
 
         return $ceiling <= 0 || strlen($content) <= $ceiling;
     }
@@ -134,10 +177,7 @@ final readonly class Conditional
      */
     private function methods(): array
     {
-        /** @var list<string> $methods */
-        $methods = $this->config->get('laravel-conditional-requests.methods', ['GET', 'HEAD']);
-
-        return array_map(strtoupper(...), $methods);
+        return array_map(strtoupper(...), $this->stringList('methods'));
     }
 
     /**
@@ -145,13 +185,34 @@ final readonly class Conditional
      */
     private function excluded(Request $request): bool
     {
-        /** @var list<string> $patterns */
-        $patterns = $this->config->get('laravel-conditional-requests.exclude', []);
+        $patterns = $this->stringList('exclude');
 
         if ($patterns === []) {
             return false;
         }
 
         return $request->routeIs(...$patterns) || $request->is(...$patterns);
+    }
+
+    /**
+     * Read a config key as a list of strings, discarding anything that is not one.
+     *
+     * A published config can hold a bare string where a list is documented; that
+     * degrades to a no-op here rather than a TypeError deep in the stack.
+     *
+     * @return list<string>
+     */
+    private function stringList(string $key): array
+    {
+        $values = [];
+        $configured = $this->config->get("laravel-conditional-requests.{$key}");
+
+        foreach (is_iterable($configured) ? $configured : [$configured] as $value) {
+            if (is_string($value)) {
+                $values[] = $value;
+            }
+        }
+
+        return $values;
     }
 }
