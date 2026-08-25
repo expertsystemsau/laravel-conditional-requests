@@ -57,3 +57,10 @@ it('declines to produce a validator for an empty body', function (): void {
 
     expect($validator)->toBeNull();
 });
+
+it('rejects a hash algorithm hash() does not support', function (): void {
+    new BodyHashStrategy('xxhash128');
+})->throws(
+    InvalidArgumentException::class,
+    'Hash algorithm [xxhash128] is not supported. Check the laravel-conditional-requests.hash config value.',
+);

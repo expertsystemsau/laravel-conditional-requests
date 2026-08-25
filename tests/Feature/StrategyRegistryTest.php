@@ -44,4 +44,4 @@ it('accepts a custom strategy', function (): void {
 
 it('rejects an unknown strategy by name', function (): void {
     app(ConditionalRequests::class)->strategy('nope');
-})->throws(InvalidArgumentException::class, 'Conditional request strategy [nope] is not registered.');
+})->throws(InvalidArgumentException::class, 'Conditional request strategy [nope] is not registered. Registered: body');

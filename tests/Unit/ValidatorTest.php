@@ -31,3 +31,23 @@ it('renders a strong header value', function (): void {
 it('renders a weak header value', function (): void {
     expect((new Validator('abc123', weak: true))->header())->toBe('W/"abc123"');
 });
+
+it('rejects an empty entity tag', function (): void {
+    new Validator('');
+})->throws(InvalidArgumentException::class, 'An entity tag cannot be empty.');
+
+it('rejects a tag that normalises away to nothing', function (): void {
+    new Validator('W/""');
+})->throws(InvalidArgumentException::class, 'An entity tag cannot be empty.');
+
+it('rejects a tag containing a double quote', function (): void {
+    new Validator('abc"123');
+})->throws(InvalidArgumentException::class, 'contains a double quote');
+
+it('rejects a tag containing a control character', function (): void {
+    new Validator("abc\n123");
+})->throws(InvalidArgumentException::class, 'An entity tag cannot contain control characters.');
+
+it('rejects a tag containing a DEL character', function (): void {
+    new Validator("abc\x7f123");
+})->throws(InvalidArgumentException::class, 'An entity tag cannot contain control characters.');

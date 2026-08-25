@@ -38,9 +38,13 @@ final class ConditionalRequests
         $resolver = $this->strategies[$name] ?? null;
 
         if (! $resolver instanceof Closure) {
-            throw new InvalidArgumentException(
-                "Conditional request strategy [{$name}] is not registered.",
-            );
+            $registered = array_keys($this->strategies);
+
+            throw new InvalidArgumentException(sprintf(
+                'Conditional request strategy [%s] is not registered. Registered: %s',
+                $name,
+                $registered === [] ? 'none' : implode(', ', $registered),
+            ));
         }
 
         return $resolver();
