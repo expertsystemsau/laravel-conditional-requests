@@ -214,12 +214,19 @@ Pest 4/5 with Orchestra Testbench, exercising real routes registered in `workben
 
 ## 9. Phasing
 
+**Reordered 2026-08-26.** The original order put the write path at `v0.2` and
+model-derived validators at `v0.4`. That is not buildable in that order: the write
+path must know the resource's *current* validator **before** the controller runs, and
+a body hash cannot supply one — there is no response to hash yet. The write path
+therefore depends on the model strategy, and the model strategy has to land first.
+Scope is unchanged; only the sequence moved.
+
 | Version | Scope |
 | --- | --- |
 | `v0.1` | Read path, body hash, `If-None-Match` → 304 — **shipped** |
-| `v0.2` | Write path, `If-Match` → 412, `required` → 428 |
-| `v0.3` | `Last-Modified` / `If-Modified-Since` / `If-Unmodified-Since` |
-| `v0.4` | Model-derived validators and pre-controller short-circuit |
+| `v0.2` | Model-derived validators, `fromRequest()`, pre-controller short-circuit |
+| `v0.3` | Write path, `If-Match` → 412, `required` → 428, `If-None-Match: *` create guard |
+| `v0.4` | `Last-Modified` / `If-Modified-Since` / `If-Unmodified-Since` |
 | `v0.5` | `lock` mode with in-transaction re-evaluation |
 | `v1.0` | Documentation, `werk365/etagconditionals` migration guide, API freeze |
 
