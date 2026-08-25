@@ -28,7 +28,24 @@ final readonly class Conditional
      */
     public function handle(Request $request, Closure $next, string ...$flags): Response
     {
-        $response = $next($request);
+        $originalMethod = $request->getMethod();
+        $isHead = $originalMethod === 'HEAD';
+
+        // For route middleware, prepareResponse() already ran by the time $next()
+        // returns, and Symfony's Response::prepare() has already nulled the body
+        // for HEAD. Present the request to the controller as a GET so there is a
+        // body left to hash, then re-empty the response ourselves afterwards.
+        if ($isHead) {
+            $request->setMethod('GET');
+        }
+
+        try {
+            $response = $next($request);
+        } finally {
+            if ($isHead) {
+                $request->setMethod($originalMethod);
+            }
+        }
 
         if (! $this->eligible($request, $response)) {
             return $response;
@@ -47,6 +64,15 @@ final readonly class Conditional
         // Symfony performs the RFC 9110 comparison and, on a match, mutates the
         // response into a compliant 304 — status, empty body, stripped headers.
         $response->isNotModified($request);
+
+        if ($isHead) {
+            $length = $response->headers->get('Content-Length');
+            $response->setContent(null);
+
+            if ($length !== null) {
+                $response->headers->set('Content-Length', $length);
+            }
+        }
 
         return $response;
     }
