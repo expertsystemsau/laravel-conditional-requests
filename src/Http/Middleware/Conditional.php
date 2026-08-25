@@ -44,13 +44,16 @@ final readonly class Conditional
         // to satisfy the list<string> parameter below. Do not remove it.
         $strategy = $this->registry->strategy($this->strategyName(array_values($flags)));
 
-        // A strategy that can answer from the request alone changes two things:
-        // the validator is known before the controller runs, and the rendered
-        // body is never needed for it — so the HEAD method mutation does not
-        // apply. The body-shaped skip rules key off the validator it actually
-        // produced rather than off the interface: see eligible().
-        $requestDerived = $strategy instanceof RequestValidatorStrategy;
-        $validator = $requestDerived ? $strategy->fromRequest($request) : null;
+        // A strategy that answers from the request alone changes two things: the
+        // validator is known before the controller runs, and the rendered body
+        // is never needed for it. Both key off the validator actually produced
+        // rather than off the interface — implementing the contract is a
+        // declaration, and a strategy that declines on this particular request
+        // falls back to fromResponse() and needs the body exactly as a
+        // body-derived one does. See eligible(), and $mutate below.
+        $validator = $strategy instanceof RequestValidatorStrategy
+            ? $strategy->fromRequest($request)
+            : null;
 
         if ($validator instanceof Validator) {
             $notModified = $this->notModified($request, $validator);
@@ -62,7 +65,7 @@ final readonly class Conditional
 
         $originalMethod = $request->getMethod();
         $isHead = $originalMethod === 'HEAD';
-        $mutate = $isHead && ! $requestDerived;
+        $mutate = $isHead && ! ($validator instanceof Validator);
 
         // Router::runRouteWithinStack()'s pipeline destination is
         // prepareResponse() (Router.php:821), which runs before route middleware

@@ -168,6 +168,24 @@ it('hands the controller a real HEAD request under a request-derived strategy', 
         ->and($response->headers->get('ETag'))->toBe('"head-tag"');
 });
 
+it('gives a declining strategy the same tag on HEAD as on GET', function (): void {
+    ConditionalRequests::extend('declining', fn (): ValidatorStrategy => decliningStrategy());
+
+    Route::middleware('conditional:declining')->get('/articles', fn () => response('body'));
+
+    // RFC 9110 §9.3.2: a HEAD carries the headers its GET would. A strategy
+    // that declines before the controller hashes the rendered body afterwards,
+    // so it needs the GET mutation exactly as `body` does. Keyed off the
+    // interface instead of the answer, the controller sees a real HEAD,
+    // prepare() nulls the body, and every such response carries one constant
+    // tag — the hash of "" — which a client can then be handed a 304 against
+    // for a resource it has never fetched.
+    $expected = '"'.hash('xxh128', 'body').'"';
+
+    expect($this->get('/articles')->headers->get('ETag'))->toBe($expected)
+        ->and($this->head('/articles')->headers->get('ETag'))->toBe($expected);
+});
+
 /**
  * A strategy of the shape the README invites: answer from the request when it
  * can, hash the rendered body when it cannot. The declining half is the one
