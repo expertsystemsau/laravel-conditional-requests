@@ -129,6 +129,16 @@ it('fails a malformed If-Match rather than passing it', function (): void {
         ->toBe(PreconditionOutcome::Failed);
 });
 
+it('compares If-Match strongly through evaluate', function (): void {
+    // §13.1.1 is the rule this phase exists for, pinned at the level the
+    // middleware actually calls. Every other If-Match case in this file uses
+    // inputs where strong and weak comparison agree, so swapping
+    // matchesStrongly() for matchesWeakly() inside evaluate() left them all
+    // green. This one goes red.
+    expect((new PreconditionEvaluator)->evaluate(guardedRequest(['If-Match' => 'W/"abc"']), new Validator('abc'), false))
+        ->toBe(PreconditionOutcome::Failed);
+});
+
 // --- If-None-Match on an unsafe method ---
 
 it('fails an If-None-Match wildcard when the resource already exists', function (): void {
