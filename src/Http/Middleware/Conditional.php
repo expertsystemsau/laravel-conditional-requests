@@ -140,10 +140,66 @@ final readonly class Conditional
      */
     private function notModified(Request $request, Validator $validator): ?Response
     {
+        if ($this->wildcardOnly($request, $validator)) {
+            return null;
+        }
+
         $response = new IlluminateResponse;
         $response->setEtag($validator->etag, $validator->weak);
 
         return $response->isNotModified($request) ? $response : null;
+    }
+
+    /**
+     * Whether a wildcard is the only reason the client's tags would match.
+     *
+     * `If-None-Match: *` matches every validator there is, so answering it
+     * before the controller hands a 304 to a client that holds nothing and has
+     * passed nothing declared after `conditional`. With a gate in that
+     * position the status code becomes an existence oracle — 304 for a record
+     * that exists, 404 for one that does not, for every id, with the gate
+     * never entered. Symfony is right to treat `*` as a match (RFC 9110
+     * §13.1.2); what cannot be right is treating it as licence to skip the
+     * rest of the pipeline.
+     *
+     * Falling through gives up the compute the short-circuit would have saved
+     * on a wildcard read, which is a rare idiom and no saving worth an oracle,
+     * and changes nothing else: the controller and every middleware after
+     * `conditional` run, attach() hands the response to the same Symfony
+     * comparison, and a client that is allowed through still gets its 304.
+     *
+     * A concrete tag alongside the wildcard is a client that does hold a
+     * validator, and it keeps the short-circuit. The comparison mirrors
+     * Response::isNotModified() so the two cannot disagree about what matched:
+     * weakness prefixes stripped from both sides, quoted forms compared.
+     */
+    private function wildcardOnly(Request $request, Validator $validator): bool
+    {
+        $etag = $this->strongForm($validator->header());
+        $wildcard = false;
+
+        foreach ($request->getETags() as $candidate) {
+            if ($candidate === '*') {
+                $wildcard = true;
+
+                continue;
+            }
+
+            if ($this->strongForm($candidate) === $etag) {
+                return false;
+            }
+        }
+
+        return $wildcard;
+    }
+
+    /**
+     * An entity tag with its weakness prefix dropped, which is all RFC 9110
+     * §8.8.3.2's weak comparison asks for.
+     */
+    private function strongForm(string $etag): string
+    {
+        return str_starts_with($etag, 'W/') ? substr($etag, 2) : $etag;
     }
 
     /**

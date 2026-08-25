@@ -72,6 +72,24 @@ it('answers 304 for a forbidden record when conditional runs before authorizatio
     $this->get('/articles/1', ['If-None-Match' => $etag])->assertStatus(304);
 });
 
+it('reaches authorization for a wildcard, which no client can be holding', function (): void {
+    articleRouteGuardedBy([
+        SubstituteBindings::class,
+        'conditional:model',
+        Authorize::class.':view-article,article',
+    ], $allowed);
+
+    $allowed = false;
+
+    // `If-None-Match: *` matches whatever the record's validator turns out to
+    // be, so a short-circuit on it would answer 304 for any record that
+    // exists and 404 for one that does not — an existence oracle behind a gate
+    // that never runs, needing no tag and no prior access. The wildcard is
+    // therefore refused the short-circuit, the gate runs, and the client is
+    // told what it is actually entitled to be told.
+    $this->get('/articles/1', ['If-None-Match' => '*'])->assertStatus(403);
+});
+
 it('answers 403 and never 304 when authorization runs before conditional', function (): void {
     articleRouteGuardedBy([
         SubstituteBindings::class,

@@ -86,12 +86,50 @@ it('short-circuits a HEAD request with no body', function (): void {
         ->and($runs)->toBe(0);
 });
 
-it('short-circuits on a bare wildcard', function (): void {
+it('does not short-circuit on a bare wildcard', function (): void {
     articleRoute($runs);
 
+    // A wildcard matches any validator, so answering it early would confirm a
+    // record to a client that holds nothing and has cleared nothing declared
+    // after `conditional`. The 304 is still correct — it just has to be earned
+    // the long way, and the counter is what proves the long way was taken.
     $this->get('/articles/1', ['If-None-Match' => '*'])->assertStatus(304);
 
+    expect($runs)->toBe(1);
+});
+
+it('short-circuits on a concrete tag sent alongside a wildcard', function (): void {
+    articleRoute($runs);
+
+    $etag = $this->get('/articles/1')->headers->get('ETag');
+    $runs = 0;
+
+    // The wildcard is not the reason this matches: the client demonstrably
+    // holds the current validator, so there is nothing left to leak.
+    $this->get('/articles/1', ['If-None-Match' => $etag.', *'])->assertStatus(304);
+
     expect($runs)->toBe(0);
+});
+
+it('short-circuits on a weak form of the current tag sent alongside a wildcard', function (): void {
+    articleRoute($runs);
+
+    $etag = $this->get('/articles/1')->headers->get('ETag');
+    $runs = 0;
+
+    // Weak comparison, the same one Response::isNotModified() performs: a
+    // W/-prefixed copy of a strong tag is still the client holding it.
+    $this->get('/articles/1', ['If-None-Match' => '*, W/'.$etag])->assertStatus(304);
+
+    expect($runs)->toBe(0);
+});
+
+it('does not short-circuit on a wildcard beside a tag that is not the current one', function (): void {
+    articleRoute($runs);
+
+    $this->get('/articles/1', ['If-None-Match' => '"stale-tag", *'])->assertStatus(304);
+
+    expect($runs)->toBe(1);
 });
 
 it('produces a 304 indistinguishable from one produced after the controller ran', function (): void {
