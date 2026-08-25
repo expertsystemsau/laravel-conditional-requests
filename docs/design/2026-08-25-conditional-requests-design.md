@@ -170,18 +170,24 @@ return [
     'strategy' => 'body',            // body | model
     'hash' => 'xxh128',              // any algo supported by hash()
     'weak' => false,
-    'max_response_bytes' => 1_048_576,
+    'max_response_bytes' => 1_048_576,  // 0 or negative means unlimited
     'methods' => ['GET', 'HEAD'],    // read path eligibility
     'exclude' => [],                 // route names or URI patterns
     'lock' => ['enabled' => false, 'timeout' => 5],
 ];
 ```
 
-`xxh128` over `sha256`: this is a change-detection fingerprint, not a security primitive, and xxh128 is substantially faster on large payloads. Collision risk is irrelevant at this scale.
+`xxh128` over `sha256`: this is a change-detection fingerprint, not a security primitive, and xxh128 is substantially faster on large payloads. Collision risk from *incidental* change is irrelevant at this scale.
+
+The threat model is worth stating, because it is the one case where the default is wrong: xxh128 offers no collision resistance against a **chosen** input. If response bodies carry attacker-influenced content and serving a stale representation matters, a crafted body can be made to collide with an earlier one and suppress the client's refresh. Those deployments should set `hash` to a cryptographic algorithm.
 
 ## 7. Edge cases to cover
 
-- `HEAD` requests must produce the same validator as the equivalent `GET`. For the body-hash strategy this requires a workaround: by the time route middleware regains control, Symfony's `Response::prepare()` has already nulled the body for `HEAD`, so the request method is mutated to `GET` around the controller call and restored afterwards, with the response body re-emptied once the validator is attached. Model-derived validators (`v0.4`) read the record's version instead of the rendered body, so they will not need this.
+- `HEAD` requests must produce the same validator as the equivalent `GET`. For the body-hash strategy this requires a workaround: the request method is mutated to `GET` around the controller call and restored afterwards, with the response body re-emptied once the validator is attached. The ordering that forces this is worth stating precisely, because **two** `prepareResponse()` calls fire per request and they justify different halves of the fix:
+    - `Router.php:821`, the pipeline destination inside `runRouteWithinStack()`, runs *before* control returns to any route middleware's post-`$next()` code. Symfony's `Response::prepare()` nulls the body for `HEAD` there, so without the method mutation there is nothing left to hash. **This is why the fix is necessary.**
+    - `Router.php:799`, the outer call in `runRoute()`, wraps the whole middleware stack and runs last, with the method already restored to `HEAD`. It nulls the body again. **This is why the middleware's own nulling is redundant under route or group placement** — and load-bearing only under global placement, where the method is still `GET` for both calls and nothing downstream re-prepares the response.
+
+    The middleware therefore routes every exit through one place that applies the nulling, rather than relying on the framework to do it. Model-derived validators (`v0.4`) read the record's version instead of the rendered body, so they will not need the mutation at all.
 - Responses already carrying an ETag (set by the application) are left alone.
 - `StreamedResponse` and `BinaryFileResponse` are skipped — hashing them means buffering them.
 - Empty-body 2xx responses (`204`) get no validator.
@@ -238,7 +244,7 @@ Verified by reading the incumbent's source at `365Werk/etagconditionals@main`, n
 | Custom ETag generator | `etagGenerateUsing()` closure | Strategy contract, swappable per route |
 | `HEAD` handled as `GET` | Method mutate/restore | Method mutate/restore, required by the same `Response::prepare()` ordering werk365 works around |
 | Middleware group alias | `etag` group | `conditional` with flags |
-| Octane support | `app()->instance('request', …)` fixup | No shared state to fix up |
+| Octane support | `app()->instance('request', …)` fixup | No static or singleton validator state, and the strategy resolver reads config from the *active* container rather than a boot-time capture, so a `config` entry in `octane.flush` cannot split-brain it |
 
 ### 11.2 Defects in the incumbent that we fix
 
@@ -258,7 +264,19 @@ Verified by reading the incumbent's source at `365Werk/etagconditionals@main`, n
 | 12 | Three middleware to wire in the correct combination | Easy to apply `setEtag` without `ifNoneMatch` and get tags that never save a round trip | One middleware, flags |
 | 13 | No PHP constraint; Laravel ≤ 12 | Unusable on Laravel 13 | PHP 8.3–8.5, Laravel 12–13 |
 
-### 11.3 Beyond parity
+### 11.3 Migration differences a `werk365/etagconditionals` user will hit
+
+Read-path *feature* parity is not read-path *behavioural* identity. Three differences are visible on day one of a migration and belong in the `v1.0` migration guide:
+
+| # | Difference | Effect at cutover |
+| --- | --- | --- |
+| 1 | `max_response_bytes` defaults to 1 MiB; werk365 has no ceiling | Responses over 1 MiB silently stop carrying an `ETag`, so a route that used to `304` no longer does. Raise the ceiling, or set it to `0` for unlimited, to match the incumbent exactly. |
+| 2 | Only 2xx responses are tagged; werk365's `setEtag` hashes every response | Clients that were caching against tags on 3xx/4xx/5xx responses lose them. This is deliberate — a validator on an error response is meaningless — but it is a behaviour change, not a no-op. |
+| 3 | `xxh128` by default; werk365 uses `md5()` | Every cached tag on every client is invalidated once, at cutover: the first request after deploy is a full `200` even for unchanged content. Setting `hash => 'md5'` preserves existing tags byte-for-byte and avoids the one-time storm. |
+
+Only (3) is fully avoidable by configuration; (1) is avoidable at the cost of the protection it buys, and (2) is not. Parity is this project's acceptance bar, so these are stated rather than glossed.
+
+### 11.4 Beyond parity
 
 - Pre-controller `304` short-circuit on model-derived validators — saves compute, not just bandwidth (D3)
 - Optional pessimistic locking that actually closes the lost-update window (D1)

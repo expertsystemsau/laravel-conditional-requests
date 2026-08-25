@@ -35,7 +35,11 @@ return [
     |
     | Any algorithm accepted by hash(). This is a change-detection fingerprint
     | rather than a security primitive, so the non-cryptographic xxh128 is the
-    | default for its throughput on large payloads.
+    | default for its throughput on large payloads. If response bodies carry
+    | attacker-influenced content and serving a stale representation matters,
+    | choose a cryptographic algorithm instead: xxh128 offers no collision
+    | resistance against a chosen input, so a crafted body can be made to
+    | collide with an earlier one and suppress the refresh.
     |
     */
 
@@ -60,7 +64,9 @@ return [
     |--------------------------------------------------------------------------
     |
     | Responses larger than this many bytes are passed through untouched, so a
-    | large payload is never hashed just to discover it changed.
+    | large payload is never hashed just to discover it changed. Set this to 0
+    | (or any non-positive value) to remove the ceiling entirely — 0 means
+    | unlimited, not "never tag".
     |
     */
 

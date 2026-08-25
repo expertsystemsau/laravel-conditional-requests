@@ -84,8 +84,74 @@ If-None-Match: "d41d8cd98f00b204"
 > [!NOTE]
 > A `HEAD` request is handed to your controller as a `GET` while the validator is computed, so it gets the same `ETag` and can still trigger a `304`; the body is emptied again before the response goes out. In practice this is invisible, since Laravel already routes `HEAD` to the `GET` action — but controller code that inspects `$request->method()` or `isMethod('HEAD')` will see `GET` for the duration of that call.
 
-> [!NOTE]
-> Everything below this line is the design contract for a later release and is **not implemented yet**.
+### Choosing a validator strategy
+
+A *strategy* is what turns a response into a validator. `body` — a hash of the rendered body — ships by default and needs no setup. Name a different one as a middleware flag on a single route:
+
+```php
+Route::get('/articles/{article}', ShowArticle::class)
+    ->middleware('conditional:body');
+```
+
+Or change the default for every route in `config/laravel-conditional-requests.php`:
+
+```php
+'strategy' => 'body',
+```
+
+A flag always wins over the config key.
+
+### Registering your own strategy
+
+Implement `ValidatorStrategy` and register it under a name, which then works as a middleware flag exactly like a built-in one:
+
+```php
+namespace App\Http\Validators;
+
+use ExpertSystems\ConditionalRequests\Contracts\ValidatorStrategy;
+use ExpertSystems\ConditionalRequests\Validators\Validator;
+use Illuminate\Http\Request;
+use Symfony\Component\HttpFoundation\Response;
+
+final readonly class RevisionStrategy implements ValidatorStrategy
+{
+    public function fromResponse(Request $request, Response $response): ?Validator
+    {
+        $article = $request->route('article');
+
+        // Returning null leaves the response untouched.
+        return $article ? new Validator((string) $article->revision) : null;
+    }
+}
+```
+
+```php
+use App\Http\Validators\RevisionStrategy;
+use ExpertSystems\ConditionalRequests\Facades\ConditionalRequests;
+
+public function boot(): void
+{
+    ConditionalRequests::extend('revision', fn () => new RevisionStrategy);
+}
+```
+
+```php
+Route::get('/articles/{article}', ShowArticle::class)
+    ->middleware('conditional:revision');
+```
+
+> [!IMPORTANT]
+> Call `extend()` from a service provider's `boot()` method only. The registry is a container singleton, so calling it from a controller, a route closure, or any other request handler permanently mutates shared state — under Laravel Octane that means for the whole worker, for every subsequent request it serves.
+
+### Proxies and content coding
+
+A validator identifies one specific set of bytes, and a reverse proxy that compresses your response changes those bytes. nginx drops the `ETag` outright when it gzips; Apache appends `-gzip` to it. Either way the tag the client holds is not the tag this middleware computed, so `If-None-Match` stops matching and you never see a `304`.
+
+If `304`s work in local development and never in production, check the proxy first — `curl -sI -H 'Accept-Encoding: gzip' <url>` against the proxy and against the app directly will show the difference immediately.
+
+## Design contract — not yet implemented
+
+Everything in this section is the design contract for a later release and is **not implemented yet**; see the [roadmap](#roadmap).
 
 ### Conditional writes (lost update protection)
 
@@ -112,15 +178,15 @@ PATCH /articles/42
 
 `428` is the piece most implementations skip. Without it a client can simply omit the header and go straight back to clobbering other people's writes — the protection is opt-out by default. `conditional:required` makes it opt-in-by-force for the routes you choose.
 
-### Header reference
+## Header reference
 
-| Request header | Applies to | On match | On mismatch |
-| --- | --- | --- | --- |
-| `If-None-Match` | reads | `304 Not Modified` | `200 OK` with body |
-| `If-Modified-Since` | reads | `304 Not Modified` | `200 OK` with body |
-| `If-Match` | writes | write proceeds | `412 Precondition Failed` |
-| `If-Unmodified-Since` | writes | write proceeds | `412 Precondition Failed` |
-| *(absent)* | writes, when required | — | `428 Precondition Required` |
+| Request header | Applies to | On match | On mismatch | Ships |
+| --- | --- | --- | --- | --- |
+| `If-None-Match` | reads | `304 Not Modified` | `200 OK` with body | yes |
+| `If-Modified-Since` | reads | `304 Not Modified` | `200 OK` with body | no |
+| `If-Match` | writes | write proceeds | `412 Precondition Failed` | no |
+| `If-Unmodified-Since` | writes | write proceeds | `412 Precondition Failed` | no |
+| *(absent)* | writes, when required | — | `428 Precondition Required` | no |
 
 ## Roadmap
 
@@ -131,7 +197,7 @@ PATCH /articles/42
 - [ ] `Last-Modified` / `If-Modified-Since` support alongside ETags
 - [ ] Model-derived validators, so an ETag comes from the record's version rather than a hash of the rendered body
 - [ ] Eloquent API Resource and resource collection support
-- [ ] Laravel Octane safety, with no validator state leaking between requests
+- [x] Laravel Octane safety, with no validator state leaking between requests
 - [ ] Migration notes for projects coming from `werk365/etagconditionals`
 
 ## Testing
