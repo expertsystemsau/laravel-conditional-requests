@@ -112,16 +112,31 @@ return response
 
 ### 5.4 Write path
 
+Applies to all unsafe methods — `POST`, `PUT`, `PATCH`, `DELETE`. MDN's canonical mid-air-collision example is a wiki save over `POST`, so restricting this to `PATCH` would miss the documented use case.
+
 ```
 if method safe (GET/HEAD/OPTIONS/TRACE)      → read path
-current ← model strategy validator for the bound resource
+current ← model strategy validator for the bound resource (null if absent)
+
+# Update guard — If-Match
 ifMatch ← request header If-Match
-if ifMatch absent:
+if ifMatch present:
+    if ifMatch is '*'  → resource exists ? proceed : throw 412
+    if no STRONG match against current       → throw 412
+
+# Create guard — If-None-Match: *   (RFC 9110 §13.1.2, MDN "first upload")
+elseif ifNoneMatch is '*':
+    resource exists                          → throw 412
+    else                                     → proceed
+
+# Fallback validator
+elseif ifUnmodifiedSince present:
+    resource modified since that date        → throw 412
+
+else:
     if required                              → throw 428
     else                                     → proceed unguarded
-if ifMatch is '*':
-    resource exists ? proceed : throw 412
-if no STRONG match against current           → throw 412
+
 if lock:
     DB::transaction(function () {
         re-read the model with lockForUpdate()
@@ -134,7 +149,9 @@ else:
 
 The re-evaluation inside the lock is the point of `lock` mode. Acquiring a lock without re-checking preserves the race.
 
-`If-Unmodified-Since` is evaluated only when `If-Match` is absent, mirroring the RFC precedence rule Symfony applies on the read side.
+**`If-None-Match: *` guards creates.** It succeeds only when the resource does *not* already exist, which makes a create idempotent under concurrency — two clients racing to create the same resource produce one `201` and one `412` instead of a silent duplicate or overwrite. This is the same optimistic-locking idea applied to first upload, and it is a distinct code path from the `If-Match` update guard.
+
+Precedence follows RFC 9110 §13.2.2: `If-Match` is evaluated first; `If-Unmodified-Since` is consulted only in its absence. This mirrors the precedence Symfony already applies on the read side.
 
 ### 5.5 Transaction ownership under `lock`
 
@@ -173,6 +190,9 @@ return [
 - `Vary` interaction: content negotiation changes the representation and therefore the validator.
 - Error responses (4xx/5xx) never receive a validator.
 - Laravel Octane: no static or container-singleton validator state; everything resolved per request.
+- **Wildcards are unquoted.** `If-Match: *` and `If-None-Match: *` are sent bare, not as `"*"`. The parser must strip optional whitespace and match the bare token, and must not confuse it with an entity tag whose value happens to be an asterisk.
+- **Content coding changes the entity tag.** MDN notes that reverse proxies alter ETags when they compress a response — Apache appends `-gzip` by default. A body hash computed before a downstream compression layer will not be the tag the client received. Documented, with a recommendation to hash after the response is final and to be aware of proxy-level rewriting.
+- Multiple comma-separated entity tags in `If-Match` / `If-None-Match`, with arbitrary surrounding whitespace.
 
 ## 8. Testing
 
@@ -203,3 +223,45 @@ Pest 4/5 with Orchestra Testbench, exercising real routes registered in `workben
 - Server-side response caching — this package validates, it does not store.
 - `Range` / `If-Range` — rare in Laravel APIs; revisit only on demand.
 - Client-side HTTP caching helpers.
+
+## 11. Parity with `werk365/etagconditionals`
+
+Verified by reading the incumbent's source at `365Werk/etagconditionals@main`, not its README. Everything it does, this package must do, and the defects below are the reason for building it.
+
+### 11.1 Feature parity baseline
+
+| Capability | werk365 | This package |
+| --- | --- | --- |
+| Set `ETag` on responses | `setEtag` middleware, `md5()` of body | Body-hash strategy, `xxh128`, configurable |
+| `If-None-Match` → `304` | `ifNoneMatch` middleware | Read path via Symfony `isNotModified()` |
+| `If-Match` → `412` | `ifMatch` middleware | Write path, `PreconditionEvaluator` |
+| Custom ETag generator | `etagGenerateUsing()` closure | Strategy contract, swappable per route |
+| `HEAD` handled as `GET` | Method mutate/restore | Native, no request mutation |
+| Middleware group alias | `etag` group | `conditional` with flags |
+| Octane support | `app()->instance('request', …)` fixup | No shared state to fix up |
+
+### 11.2 Defects in the incumbent that we fix
+
+| # | Issue in werk365 | Consequence | Our behaviour |
+| --- | --- | --- | --- |
+| 1 | `IfMatch` guards `PATCH` only | `PUT`, `POST`, `DELETE` are unprotected. MDN's own wiki example uses `POST`. | All unsafe methods |
+| 2 | Returns early when `If-Match` is absent | The guard is opt-out: omit the header, clobber freely. No `428` exists. | `428 Precondition Required` under `required` |
+| 3 | `in_array('"*"', $ifMatchArray)` expects a **quoted** wildcard | A spec-compliant `If-Match: *` fails to match and gets a spurious `412` | Bare `*` parsed per RFC |
+| 4 | `if_match_weak` defaults to `true`, stripping `W/` | Weak comparison on `If-Match` contradicts RFC 9110 §13.1.1 and MDN, which both require **strong** validation | Strong comparison, not configurable away |
+| 5 | Re-dispatches an internal `GET` through `app()->handle()` to learn current state | Runs the entire kernel a second time per guarded write — middleware, auth, controller, serialization. Copies all request headers into the synthetic GET and needs an `X-From-Middleware` sentinel that consumers must special-case in their own middleware. | Model-derived validator, no second dispatch |
+| 6 | No lock between the internal `GET` and `$next()` | TOCTOU: the update it just validated can be superseded before it commits | Optional `lock` mode with in-transaction re-check |
+| 7 | Unreachable `if ($ifMatch === null) return 412` | Dead code; the early return above already handled it | N/A |
+| 8 | No `Last-Modified`, `If-Modified-Since`, or `If-Unmodified-Since` | Half of RFC 9110's validators unimplemented | All four conditional headers |
+| 9 | No `If-None-Match: *` create guard | Concurrent creates silently duplicate or overwrite | Supported |
+| 10 | `setEtag` hashes every response | Streamed, binary, and large responses get buffered and hashed | Skip rules with a size ceiling |
+| 11 | `md5()` on every response body | Slower than necessary for a non-cryptographic fingerprint | `xxh128` default |
+| 12 | Three middleware to wire in the correct combination | Easy to apply `setEtag` without `ifNoneMatch` and get tags that never save a round trip | One middleware, flags |
+| 13 | No PHP constraint; Laravel ≤ 12 | Unusable on Laravel 13 | PHP 8.3–8.5, Laravel 12–13 |
+
+### 11.3 Beyond parity
+
+- Pre-controller `304` short-circuit on model-derived validators — saves compute, not just bandwidth (D3)
+- Optional pessimistic locking that actually closes the lost-update window (D1)
+- Boot-time validation: `required` with a weak strategy, or `lock` without a lockable resource, throws instead of failing mysteriously at runtime
+- Configurable skip rules — methods, status codes, routes, response size
+- Migration guide mapping `setEtag` / `ifNoneMatch` / `ifMatch` onto `conditional` flags
