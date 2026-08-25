@@ -6,9 +6,12 @@ namespace ExpertSystems\ConditionalRequests\Http\Middleware;
 
 use Closure;
 use ExpertSystems\ConditionalRequests\ConditionalRequests;
+use ExpertSystems\ConditionalRequests\Contracts\RequestValidatorStrategy;
+use ExpertSystems\ConditionalRequests\Contracts\ValidatorStrategy;
 use ExpertSystems\ConditionalRequests\Validators\Validator;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response as IlluminateResponse;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpFoundation\StreamedResponse;
@@ -33,6 +36,27 @@ final readonly class Conditional
         // pass-through and the controller sees the method the client sent.
         if (! $this->requestEligible($request)) {
             return $next($request);
+        }
+
+        // array_values() looks like a no-op and is one at runtime, but PHPStan
+        // types a `string ...$flags` variadic as array<int<0,max>|string,
+        // string> — a variadic can receive named arguments — so it is needed
+        // to satisfy the list<string> parameter below. Do not remove it.
+        $strategy = $this->registry->strategy($this->strategyName(array_values($flags)));
+
+        // A strategy that can answer from the request alone is the point of the
+        // model strategy: the validator is known before the controller runs, so
+        // a matching If-None-Match costs no controller execution at all.
+        if ($strategy instanceof RequestValidatorStrategy) {
+            $validator = $strategy->fromRequest($request);
+
+            if ($validator instanceof Validator) {
+                $notModified = $this->notModified($request, $validator);
+
+                if ($notModified instanceof Response) {
+                    return $notModified;
+                }
+            }
         }
 
         $originalMethod = $request->getMethod();
@@ -62,11 +86,7 @@ final readonly class Conditional
         // check still earns its place: it keeps a URI-excluded route a true
         // pass-through with no request mutation at all.
         if (! $this->excluded($request) && $this->eligible($response)) {
-            // array_values() looks like a no-op and is one at runtime, but PHPStan
-            // types a `string ...$flags` variadic as array<int<0,max>|string,
-            // string> — a variadic can receive named arguments — so it is needed
-            // to satisfy the list<string> parameter below. Do not remove it.
-            $this->attach($request, $response, array_values($flags));
+            $this->attach($request, $response, $strategy);
         }
 
         // Single exit, so every path applies the HEAD nulling. Under route or
@@ -77,14 +97,10 @@ final readonly class Conditional
 
     /**
      * Attach a validator and let Symfony decide whether it is still current.
-     *
-     * @param  list<string>  $flags
      */
-    private function attach(Request $request, Response $response, array $flags): void
+    private function attach(Request $request, Response $response, ValidatorStrategy $strategy): void
     {
-        $validator = $this->registry
-            ->strategy($this->strategyName($flags))
-            ->fromResponse($request, $response);
+        $validator = $strategy->fromResponse($request, $response);
 
         if (! $validator instanceof Validator) {
             return;
@@ -95,6 +111,29 @@ final readonly class Conditional
         // Symfony performs the RFC 9110 comparison and, on a match, mutates the
         // response into a compliant 304 — status, empty body, stripped headers.
         $response->isNotModified($request);
+    }
+
+    /**
+     * A complete 304 for a validator known before the controller ran, or null
+     * when the client's tags do not match it and the controller has to run.
+     *
+     * Symfony owns the comparison here exactly as it does after the controller,
+     * and setNotModified() strips the response back to a compliant 304 —
+     * status, empty body, forbidden headers removed, ETag kept. Laravel's
+     * Router::toResponse() then normalises any 304 the same way whichever path
+     * produced it, which is what makes the two indistinguishable to a client.
+     *
+     * Laravel's own Response rather than Symfony's: toResponse() passes any
+     * SymfonyResponse straight through unwrapped, so a bare one would reach
+     * outer middleware — and the test suite — missing every convenience
+     * ResponseTrait adds, status() and header() among them.
+     */
+    private function notModified(Request $request, Validator $validator): ?Response
+    {
+        $response = new IlluminateResponse;
+        $response->setEtag($validator->etag, $validator->weak);
+
+        return $response->isNotModified($request) ? $response : null;
     }
 
     /**

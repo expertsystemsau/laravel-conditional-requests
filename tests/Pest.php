@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use ExpertSystems\ConditionalRequests\Contracts\RequestValidatorStrategy;
 use ExpertSystems\ConditionalRequests\Contracts\ValidatorStrategy;
 use ExpertSystems\ConditionalRequests\Tests\TestCase;
 use ExpertSystems\ConditionalRequests\Validators\Validator;
@@ -19,6 +20,28 @@ function fixedTagStrategy(string $tag): ValidatorStrategy
     return new class($tag) implements ValidatorStrategy
     {
         public function __construct(private readonly string $tag) {}
+
+        public function fromResponse(Request $request, Response $response): ?Validator
+        {
+            return new Validator($this->tag);
+        }
+    };
+}
+
+/**
+ * The same fixed tag, from a strategy that can answer before the controller
+ * runs — the difference between the two is the short-circuit itself.
+ */
+function fixedRequestTagStrategy(string $tag): RequestValidatorStrategy
+{
+    return new class($tag) implements RequestValidatorStrategy
+    {
+        public function __construct(private readonly string $tag) {}
+
+        public function fromRequest(Request $request): ?Validator
+        {
+            return new Validator($this->tag);
+        }
 
         public function fromResponse(Request $request, Response $response): ?Validator
         {
