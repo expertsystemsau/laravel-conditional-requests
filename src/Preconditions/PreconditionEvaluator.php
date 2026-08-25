@@ -36,6 +36,26 @@ final readonly class PreconditionEvaluator
      * is consulted only in its absence. The `required` flag is what turns the
      * absence of any precondition from "proceed" into 428 — without it the
      * guard is opt-out and a client clobbers freely by omitting a header.
+     *
+     * A null $current collapses two states the v0.2 contract cannot tell apart:
+     * the resource is absent, and the resource exists but has no validator the
+     * strategy could derive. The two wildcards read that one state in opposite
+     * directions, and the asymmetry is deliberate:
+     *
+     *  - `If-Match: *` fails CLOSED. Nothing can be shown to exist, so the
+     *    update guard refuses with 412 and no write happens.
+     *  - `If-None-Match: *` fails OPEN. Nothing can be shown to exist, so the
+     *    create guard passes and the write happens.
+     *
+     * The second is acceptable, not harmless. A create aimed at a record that
+     * does exist but yields no validator passes the only precondition meant to
+     * stop it, and the first writer's row is silently overwritten — the lost
+     * update this class exists to refuse, arriving through the guard against
+     * it. Closing it means asking the contract "does this resource exist?"
+     * separately from "what is its version?", because a genuinely absent
+     * resource produces the same null and a fail-closed create guard would
+     * refuse every legitimate create. That contract change is out of scope
+     * here, so the asymmetry stands until it lands.
      */
     public function evaluate(Request $request, ?Validator $current, bool $required): PreconditionOutcome
     {
