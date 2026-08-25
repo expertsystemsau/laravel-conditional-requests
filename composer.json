@@ -1,11 +1,26 @@
 {
     "$schema": "https://getcomposer.org/schema.json",
     "name": "expertsystemsau/laravel-conditional-requests",
-    "description": "xx",
+    "description": "HTTP conditional requests for Laravel \u2014 ETag, Last-Modified, 304 Not Modified, and lost-update protection with If-Match.",
     "keywords": [
         "laravel",
-        "expertsystemsau",
-        "laravel-conditional-requests"
+        "php",
+        "http",
+        "conditional-requests",
+        "etag",
+        "etags",
+        "last-modified",
+        "if-match",
+        "if-none-match",
+        "if-modified-since",
+        "http-cache",
+        "http-caching",
+        "not-modified",
+        "optimistic-locking",
+        "concurrency-control",
+        "middleware",
+        "rest-api",
+        "api"
     ],
     "homepage": "https://github.com/expertsystemsau/laravel-conditional-requests",
     "license": "MIT",
@@ -13,9 +28,16 @@
         {
             "name": "Mitchell Williams",
             "email": "mitchell@expertsystems.com.au",
+            "homepage": "https://expertsystems.com.au",
             "role": "Developer"
         }
     ],
+    "support": {
+        "issues": "https://github.com/expertsystemsau/laravel-conditional-requests/issues",
+        "source": "https://github.com/expertsystemsau/laravel-conditional-requests",
+        "docs": "https://github.com/expertsystemsau/laravel-conditional-requests#readme",
+        "security": "https://github.com/expertsystemsau/laravel-conditional-requests/blob/main/.github/SECURITY.md"
+    },
     "require": {
         "php": "^8.3",
         "illuminate/support": "^12.0||^13.0"
