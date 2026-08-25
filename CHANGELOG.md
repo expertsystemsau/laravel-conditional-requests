@@ -6,6 +6,19 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased](https://github.com/expertsystemsau/laravel-conditional-requests/compare/v0.1.0...main)
 
+### Added
+
+- `model` validator strategy, deriving a strong `ETag` from a route-bound record's own version.
+- `ProvidesConditionalValidator` contract and `HasConditionalValidator` trait for models.
+- `RequestValidatorStrategy` contract, for strategies that can answer before the controller runs.
+- Pre-controller `304` short-circuit: a matching `If-None-Match` on a model-derived route never executes the route action.
+- Order-independent middleware flags, with `required` and `lock` reserved and implying the `model` strategy.
+
+### Changed
+
+- Streamed, binary, and oversized responses now carry a validator when the strategy derives it from the request rather than the body.
+- A `HEAD` request is no longer presented to the controller as a `GET` when the strategy does not need the rendered body.
+
 ## v0.1.0
 
 ### Added

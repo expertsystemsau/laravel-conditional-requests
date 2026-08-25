@@ -14,8 +14,11 @@ use Symfony\Component\HttpFoundation\Response;
  * Derives a validator from a route-bound record's own version.
  *
  * The validator is known before the controller runs, so a matching
- * If-None-Match costs no controller execution, no queries, and no
- * serialization — this strategy saves compute, not just bandwidth.
+ * If-None-Match costs no controller execution and no serialization — this
+ * strategy saves compute, not just bandwidth. It does not cost no queries:
+ * with implicit route-model binding, the only wiring this package documents,
+ * SubstituteBindings issues the binding query before Conditional ever runs,
+ * so a short-circuited 304 still costs that one query.
  */
 final readonly class ModelStrategy implements RequestValidatorStrategy
 {

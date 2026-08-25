@@ -73,7 +73,7 @@ Therefore:
 | `Validators/ModelStrategy` | Pre-controller. From a route-bound model. Strong. |
 | `Preconditions/PreconditionEvaluator` | Our own `If-Match` / `If-Unmodified-Since` evaluation, strong comparison. |
 | `Contracts/ProvidesConditionalValidator` | Model-side contract. |
-| `Concerns/HasConditionalValidator` | Default trait implementation from `updated_at` + key. |
+| `Concerns/HasConditionalValidator` | Default trait implementation from the table, key, and either a `version` column or `updated_at`. |
 | `Exceptions/PreconditionFailedException` | `HttpException` subclass, 412. |
 | `Exceptions/PreconditionRequiredException` | `HttpException` subclass, 428. |
 
@@ -187,8 +187,8 @@ The threat model is worth stating, because it is the one case where the default 
     - `Router.php:821`, the pipeline destination inside `runRouteWithinStack()`, runs *before* control returns to any route middleware's post-`$next()` code. Symfony's `Response::prepare()` nulls the body for `HEAD` there, so without the method mutation there is nothing left to hash. **This is why the fix is necessary.**
     - `Router.php:799`, the outer call in `runRoute()`, wraps the whole middleware stack and runs last, with the method already restored to `HEAD`. It nulls the body again. **This is why the middleware's own nulling is redundant under route or group placement** — and load-bearing only under global placement, where the method is still `GET` for both calls and nothing downstream re-prepares the response.
 
-    The middleware therefore routes every exit through one place that applies the nulling, rather than relying on the framework to do it. Model-derived validators (`v0.4`) read the record's version instead of the rendered body, so they will not need the mutation at all.
-- Responses already carrying an ETag (set by the application) are left alone.
+    The middleware therefore routes every exit through one place that applies the nulling, rather than relying on the framework to do it. Model-derived validators (`v0.2`) read the record's version instead of the rendered body, so the mutation is skipped for them entirely.
+- Responses already carrying an ETag (set by the application) are left alone. The pre-controller short-circuit cannot make this check — the controller has not run, so no application-set ETag exists yet to defer to — which means a client sending a fabricated tag that happens to match the model-derived validator gets a `304` carrying a tag the eventual representation does not actually have. Only reachable with a fabricated tag; no code change, documented here.
 - `StreamedResponse` and `BinaryFileResponse` are skipped — hashing them means buffering them.
 - Empty-body 2xx responses (`204`) get no validator.
 - Multiple ETags in `If-Match` — any strong match passes.
@@ -199,6 +199,9 @@ The threat model is worth stating, because it is the one case where the default 
 - **Wildcards are unquoted.** `If-Match: *` and `If-None-Match: *` are sent bare, not as `"*"`. The parser must strip optional whitespace and match the bare token, and must not confuse it with an entity tag whose value happens to be an asterisk.
 - **Content coding changes the entity tag.** MDN notes that reverse proxies alter ETags when they compress a response — Apache appends `-gzip` by default. A body hash computed before a downstream compression layer will not be the tag the client received. Documented, with a recommendation to hash after the response is final and to be aware of proxy-level rewriting.
 - Multiple comma-separated entity tags in `If-Match` / `If-None-Match`, with arbitrary surrounding whitespace.
+- **The pre-controller short-circuit answers before authorization does.** A matching tag skips everything the controller would have decided, per-record authorization included, so a client holding a still-valid tag keeps getting `304` after its access to that record is revoked, or for a record the controller would otherwise have hidden from it. Inherent to answering before the controller runs, not a defect. Mitigated by documentation: place `conditional` after authorization middleware, and treat a per-record check made inside the controller action itself as skipped on a hit.
+- **A short-circuited `304` carries fewer headers than the long way round.** `Vary`, an application `Cache-Control`, `Content-Location`, and similar are set by the controller or by downstream middleware, none of which run on a hit. RFC 9110 §15.4.5 says a `304` should carry them. The `304` produced after the controller has run carries them exactly as before; only the pre-controller short-circuit is short a set of headers nothing ran to set.
+- **Route-name exclusions cannot suppress the short-circuit.** `Conditional::excluded()` is re-checked after `$next()` specifically because `Request::routeIs()` is always false before routing, and the short-circuit returns before that re-check ever runs. Unreachable with the shipped `model` strategy — no route bound means `fromRequest()` returns null and the short-circuit never fires — but reachable for a route-free custom `RequestValidatorStrategy` under kernel-global placement.
 
 ## 8. Testing
 
@@ -224,7 +227,7 @@ Scope is unchanged; only the sequence moved.
 | Version | Scope |
 | --- | --- |
 | `v0.1` | Read path, body hash, `If-None-Match` → 304 — **shipped** |
-| `v0.2` | Model-derived validators, `fromRequest()`, pre-controller short-circuit |
+| `v0.2` | Model-derived validators, `fromRequest()`, pre-controller short-circuit — **shipped** |
 | `v0.3` | Write path, `If-Match` → 412, `required` → 428, `If-None-Match: *` create guard |
 | `v0.4` | `Last-Modified` / `If-Modified-Since` / `If-Unmodified-Since` |
 | `v0.5` | `lock` mode with in-transaction re-evaluation |

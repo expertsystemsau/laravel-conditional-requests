@@ -24,7 +24,7 @@ Most Laravel packages in this space only do the first half, and only via ETag. T
 ## Status
 
 > [!WARNING]
-> **Pre-release — under active development.** The read path described below ships and is tested. The write path (`conditional:required`, `412`, `428`), the `Last-Modified` family, model-derived validators, and locking are not implemented yet — they are marked on the [roadmap](#roadmap) below. Nothing is stable until `v1.0.0`.
+> **Pre-release — under active development.** The read path described below ships and is tested, model-derived validators and the pre-controller `304` short-circuit included. The write path (`conditional:required`, `412`, `428`), the `Last-Modified` family, and locking are not implemented yet — they are marked on the [roadmap](#roadmap) below. Nothing is stable until `v1.0.0`.
 
 ## Requirements
 
@@ -86,7 +86,14 @@ If-None-Match: "d41d8cd98f00b204"
 
 ### Choosing a validator strategy
 
-A *strategy* is what turns a response into a validator. `body` — a hash of the rendered body — ships by default and needs no setup. Name a different one as a middleware flag on a single route:
+A *strategy* is what produces the validator. Two ship:
+
+| Flag | Source | Runs | Cost saved |
+| --- | --- | --- | --- |
+| `body` | a hash of the rendered response | after the controller | bandwidth |
+| `model` | the route-bound record's own version | **before** the controller | bandwidth and compute |
+
+`body` is the default and needs no setup. Name either one as a middleware flag on a single route:
 
 ```php
 Route::get('/articles/{article}', ShowArticle::class)
@@ -100,6 +107,90 @@ Or change the default for every route in `config/laravel-conditional-requests.ph
 ```
 
 A flag always wins over the config key.
+
+### Model-derived validators
+
+The `model` strategy takes the validator from the route-bound record rather than from the rendered body. Because the record's version is known **before** the controller runs, a request whose `If-None-Match` already matches is answered with `304` without executing the route action — no serialization, and with implicit route-model binding (the only wiring documented here) one query fewer than the long way, not zero: `SubstituteBindings` still issues the binding query before `conditional` runs.
+
+Add the contract and the trait to the model:
+
+```php
+namespace App\Models;
+
+use ExpertSystems\ConditionalRequests\Concerns\HasConditionalValidator;
+use ExpertSystems\ConditionalRequests\Contracts\ProvidesConditionalValidator;
+use Illuminate\Database\Eloquent\Model;
+
+class Article extends Model implements ProvidesConditionalValidator
+{
+    use HasConditionalValidator;
+}
+```
+
+Then name the strategy on the route:
+
+```php
+Route::get('/articles/{article}', ShowArticle::class)
+    ->middleware('conditional:model');
+```
+
+```http
+GET /articles/42
+→ 200 OK
+  ETag: "9b1c0e0f6b0a4f9d"
+
+GET /articles/42
+If-None-Match: "9b1c0e0f6b0a4f9d"
+→ 304 Not Modified          # the controller never ran
+```
+
+> [!WARNING]
+> A matching tag skips **everything the controller would have decided**, per-record authorization included. A client holding a still-valid tag keeps receiving `304` after its access to that record is revoked, or for a record the controller would otherwise have hidden from it — the middleware answers before any of that logic runs. This is inherent to answering before the controller, not a defect. Mitigate it by placing `conditional` **after** your authorization middleware, so a request that should be rejected never reaches the strategy at all, and by knowing that a per-record check made *inside* the controller action itself is skipped entirely on a hit — it has to live in middleware to apply.
+
+The default tag fingerprints the record's table, its key, and its version — an explicit `version` column when the model has one, otherwise the raw `updated_at` value. The table is in there so two records with the same id in different tables can never share a tag. A record with no version at all — one that has never been saved — produces no validator, and the response is left untouched.
+
+Model-derived validators are **strong**. RFC 9110 §13.1.1 requires strong comparison for `If-Match`, so a weak tag could never satisfy the write-path guard.
+
+> [!IMPORTANT]
+> `conditional` must run **after** route model binding. Inside the `api` or `web` middleware group that is already true, since `SubstituteBindings` belongs to both. On a route that has not had its bindings substituted yet — kernel-global placement, or a hand-written middleware list that puts `conditional` first — the strategy finds no record before the controller runs and the request quietly takes the ordinary path: the `ETag` is still attached on the way out, but the controller runs and nothing is saved.
+
+> [!NOTE]
+> `updated_at` is stored to the second by default, so two writes inside the same second produce the same tag. Add a `version` column, or widen the column's precision, on resources that change that fast.
+
+> [!NOTE]
+> A short-circuited `304` cannot carry headers your controller or downstream middleware would have set — an application `Cache-Control`, `Vary`, `Content-Location`, and the like never run on a hit, because nothing that would set them does. RFC 9110 §15.4.5 says a `304` *should* carry them. The long way round — controller runs, `304` decided afterwards — carries them exactly as before; only the pre-controller short-circuit skips them.
+
+When a route binds more than one conditional record, the **first** route parameter implementing the contract wins — parameters keep their declaration order, so on `/articles/{article}/comments/{comment}` the article is the target.
+
+#### Varying the tag by representation
+
+A strong validator asserts one specific representation. If the same record is served in more than one shape — content negotiation, sparse fieldsets, `?include=` — fold that input into the tag. That is what the `$request` argument is for:
+
+```php
+use ExpertSystems\ConditionalRequests\Concerns\HasConditionalValidator;
+use ExpertSystems\ConditionalRequests\Contracts\ProvidesConditionalValidator;
+use ExpertSystems\ConditionalRequests\Validators\Validator;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Http\Request;
+
+class Article extends Model implements ProvidesConditionalValidator
+{
+    use HasConditionalValidator {
+        conditionalValidator as baseConditionalValidator;
+    }
+
+    public function conditionalValidator(Request $request): ?Validator
+    {
+        $validator = $this->baseConditionalValidator($request);
+
+        if (! $validator instanceof Validator) {
+            return null;
+        }
+
+        return new Validator(hash('xxh128', $validator->etag."\0".(string) $request->query('fields')));
+    }
+}
+```
 
 ### Registering your own strategy
 
@@ -142,6 +233,14 @@ Route::get('/articles/{article}', ShowArticle::class)
 
 > [!IMPORTANT]
 > Call `extend()` from a service provider's `boot()` method only. The registry is a container singleton, so calling it from a controller, a route closure, or any other request handler permanently mutates shared state — under Laravel Octane that means for the whole worker, for every subsequent request it serves.
+
+A custom strategy can take part in the short-circuit too. Implement `RequestValidatorStrategy`, which extends `ValidatorStrategy` with one method:
+
+```php
+public function fromRequest(Request $request): ?Validator;
+```
+
+Answer from the request alone and the middleware will ask before the controller runs; return `null` and it falls back to `fromResponse()` afterwards. A strategy that implements only `ValidatorStrategy` keeps working exactly as it did — it is simply never asked early.
 
 ### Proxies and content coding
 
@@ -195,7 +294,7 @@ PATCH /articles/42
 - [ ] `conditional:required` middleware — `If-Match` enforcement with `412` / `428`
 - [x] Strong and weak ETag generation, with a configurable strategy
 - [ ] `Last-Modified` / `If-Modified-Since` support alongside ETags
-- [ ] Model-derived validators, so an ETag comes from the record's version rather than a hash of the rendered body
+- [x] Model-derived validators, so an ETag comes from the record's version rather than a hash of the rendered body — including the pre-controller `304` short-circuit
 - [ ] Eloquent API Resource and resource collection support
 - [x] Laravel Octane safety, with no validator state leaking between requests
 - [ ] Migration notes for projects coming from `werk365/etagconditionals`
