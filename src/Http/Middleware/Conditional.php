@@ -126,23 +126,15 @@ final readonly class Conditional
     }
 
     /**
-     * The first flag naming a strategy wins; otherwise fall back to config.
-     *
-     * @todo v0.2 must rewrite this. Design §5.2 makes flags order-independent,
-     *   with `required` and `lock` implying `model`, so a flag is not always a
-     *   strategy name and the first one is not necessarily the strategy.
+     * The strategy this route asked for, or the configured default.
      *
      * @param  list<string>  $flags
      */
     private function strategyName(array $flags): string
     {
-        foreach ($flags as $flag) {
-            if ($flag !== '') {
-                return $flag;
-            }
-        }
-
-        return (string) $this->config->get('laravel-conditional-requests.strategy');
+        return Flags::parse($flags)->strategyOr(
+            (string) $this->config->get('laravel-conditional-requests.strategy'),
+        );
     }
 
     /**

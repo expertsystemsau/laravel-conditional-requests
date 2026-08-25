@@ -4,27 +4,7 @@ declare(strict_types=1);
 
 use ExpertSystems\ConditionalRequests\Contracts\ValidatorStrategy;
 use ExpertSystems\ConditionalRequests\Facades\ConditionalRequests;
-use ExpertSystems\ConditionalRequests\Validators\Validator;
-use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
-use Symfony\Component\HttpFoundation\Response;
-
-/**
- * A strategy that ignores the response entirely and returns a known tag, so a
- * test can prove which strategy the middleware picked from the ETag alone.
- */
-function fixedTagStrategy(string $tag): ValidatorStrategy
-{
-    return new class($tag) implements ValidatorStrategy
-    {
-        public function __construct(private readonly string $tag) {}
-
-        public function fromResponse(Request $request, Response $response): ?Validator
-        {
-            return new Validator($this->tag);
-        }
-    };
-}
 
 beforeEach(function (): void {
     ConditionalRequests::extend('flag-probe', fn (): ValidatorStrategy => fixedTagStrategy('from-flag'));
