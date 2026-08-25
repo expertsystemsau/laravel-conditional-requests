@@ -204,7 +204,15 @@ final readonly class Conditional
      * A concrete tag alongside the wildcard is a client that does hold a
      * validator, and it keeps the short-circuit. The comparison mirrors
      * Response::isNotModified() so the two cannot disagree about what matched:
-     * weakness prefixes stripped from both sides, quoted forms compared.
+     * weakness prefixes stripped from both sides, quoted forms compared, and
+     * the stripping done before the wildcard test rather than after it. That
+     * order is Symfony's (Response.php:1135) and it is load-bearing, not
+     * cosmetic. `W/*` is not a wildcard under §13.1.2's grammar — nothing is a
+     * wildcard but a bare `*` — yet Symfony drops the prefix first and then
+     * matches on the `*` left behind. Testing the raw token here would call it
+     * a concrete tag, find it does not match, and grant a short-circuit that
+     * isNotModified() then answers 304: the oracle back verbatim, spelled
+     * differently. Whatever Symfony will call a wildcard has to be one here.
      */
     private function wildcardOnly(Request $request, Validator $validator): bool
     {
@@ -212,13 +220,15 @@ final readonly class Conditional
         $wildcard = false;
 
         foreach ($request->getETags() as $candidate) {
+            $candidate = $this->strongForm($candidate);
+
             if ($candidate === '*') {
                 $wildcard = true;
 
                 continue;
             }
 
-            if ($this->strongForm($candidate) === $etag) {
+            if ($candidate === $etag) {
                 return false;
             }
         }

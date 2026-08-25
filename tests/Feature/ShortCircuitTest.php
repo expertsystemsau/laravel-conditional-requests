@@ -132,6 +132,27 @@ it('does not short-circuit on a wildcard beside a tag that is not the current on
     expect($runs)->toBe(1);
 });
 
+it('does not short-circuit on a weak-form wildcard', function (): void {
+    articleRoute($runs);
+
+    // `W/*` is not valid under RFC 9110 §13.1.2's grammar, but Symfony strips
+    // the weakness prefix before it tests for `*`, so isNotModified() reads it
+    // as a wildcard and matches. A guard that tested the raw token would read
+    // it as a concrete tag, let the short-circuit through, and hand back the
+    // oracle a bare `*` no longer gives. It is a wildcard here too.
+    $this->get('/articles/1', ['If-None-Match' => 'W/*'])->assertStatus(304);
+
+    expect($runs)->toBe(1);
+});
+
+it('does not short-circuit on a weak-form wildcard beside a tag that is not the current one', function (): void {
+    articleRoute($runs);
+
+    $this->get('/articles/1', ['If-None-Match' => '"stale-tag", W/*'])->assertStatus(304);
+
+    expect($runs)->toBe(1);
+});
+
 it('produces a 304 indistinguishable from one produced after the controller ran', function (): void {
     ConditionalRequests::extend('probe-response', fn (): ValidatorStrategy => fixedTagStrategy('probe-tag'));
     ConditionalRequests::extend('probe-request', fn (): ValidatorStrategy => fixedRequestTagStrategy('probe-tag'));

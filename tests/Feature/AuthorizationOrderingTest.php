@@ -90,6 +90,27 @@ it('reaches authorization for a wildcard, which no client can be holding', funct
     $this->get('/articles/1', ['If-None-Match' => '*'])->assertStatus(403);
 });
 
+it('reaches authorization for a weak-form wildcard, which Symfony also matches on', function (): void {
+    articleRouteGuardedBy([
+        SubstituteBindings::class,
+        'conditional:model',
+        Authorize::class.':view-article,article',
+    ], $allowed);
+
+    $allowed = false;
+
+    // `W/*` is not a wildcard under RFC 9110 §13.1.2's grammar, but
+    // Response::isNotModified() drops the weakness prefix before it tests for
+    // `*` and so treats it as one. Anything the short-circuit lets through on
+    // the strength of a tag Symfony will then call a wildcard is the same
+    // oracle by another spelling, so the weakness prefix comes off here first
+    // too and the gate gets the request.
+    $this->get('/articles/1', ['If-None-Match' => 'W/*'])->assertStatus(403);
+
+    // Nothing changes when a tag the client does not hold is sent with it.
+    $this->get('/articles/1', ['If-None-Match' => '"stale-tag", W/*'])->assertStatus(403);
+});
+
 it('answers 403 and never 304 when authorization runs before conditional', function (): void {
     articleRouteGuardedBy([
         SubstituteBindings::class,
