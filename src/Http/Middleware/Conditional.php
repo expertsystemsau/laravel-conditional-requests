@@ -44,37 +44,38 @@ final readonly class Conditional
         // to satisfy the list<string> parameter below. Do not remove it.
         $strategy = $this->registry->strategy($this->strategyName(array_values($flags)));
 
-        // A strategy that can answer from the request alone is the point of the
-        // model strategy: the validator is known before the controller runs, so
-        // a matching If-None-Match costs no controller execution at all.
-        if ($strategy instanceof RequestValidatorStrategy) {
-            $validator = $strategy->fromRequest($request);
+        // A strategy that can answer from the request alone changes two things:
+        // the validator is known before the controller runs, and the rendered
+        // body is never needed — so neither the HEAD method mutation nor the
+        // body-shaped skip rules apply to it.
+        $requestDerived = $strategy instanceof RequestValidatorStrategy;
+        $validator = $requestDerived ? $strategy->fromRequest($request) : null;
 
-            if ($validator instanceof Validator) {
-                $notModified = $this->notModified($request, $validator);
+        if ($validator instanceof Validator) {
+            $notModified = $this->notModified($request, $validator);
 
-                if ($notModified instanceof Response) {
-                    return $notModified;
-                }
+            if ($notModified instanceof Response) {
+                return $notModified;
             }
         }
 
         $originalMethod = $request->getMethod();
         $isHead = $originalMethod === 'HEAD';
+        $mutate = $isHead && ! $requestDerived;
 
         // Router::runRouteWithinStack()'s pipeline destination is
         // prepareResponse() (Router.php:821), which runs before route middleware
         // regains control, and Symfony's Response::prepare() nulls the body for
         // HEAD there. Present the request to the controller as a GET so there is
         // a body left to hash, then re-empty the response ourselves afterwards.
-        if ($isHead) {
+        if ($mutate) {
             $request->setMethod('GET');
         }
 
         try {
             $response = $next($request);
         } finally {
-            if ($isHead) {
+            if ($mutate) {
                 $request->setMethod($originalMethod);
             }
         }
@@ -85,8 +86,8 @@ final readonly class Conditional
         // route-name exclusion could only ever be honoured here. The pre-$next()
         // check still earns its place: it keeps a URI-excluded route a true
         // pass-through with no request mutation at all.
-        if (! $this->excluded($request) && $this->eligible($response)) {
-            $this->attach($request, $response, $strategy);
+        if (! $this->excluded($request) && $this->eligible($response, $requestDerived)) {
+            $this->attach($request, $response, $strategy, $validator);
         }
 
         // Single exit, so every path applies the HEAD nulling. Under route or
@@ -97,10 +98,15 @@ final readonly class Conditional
 
     /**
      * Attach a validator and let Symfony decide whether it is still current.
+     *
+     * A validator already computed from the request is reused rather than
+     * derived a second time: it is the same answer, and reusing it guarantees
+     * the tag on this response is the one the short-circuit will compare
+     * against on the next request.
      */
-    private function attach(Request $request, Response $response, ValidatorStrategy $strategy): void
+    private function attach(Request $request, Response $response, ValidatorStrategy $strategy, ?Validator $known): void
     {
-        $validator = $strategy->fromResponse($request, $response);
+        $validator = $known ?? $strategy->fromResponse($request, $response);
 
         if (! $validator instanceof Validator) {
             return;
@@ -180,7 +186,7 @@ final readonly class Conditional
      * Whether this request should take part in the read path at all.
      *
      * Request-shaped only: no response is needed, which is what lets it run
-     * before the controller and, in v0.4, gate the pre-controller short-circuit.
+     * before the controller and gate the pre-controller short-circuit.
      */
     private function requestEligible(Request $request): bool
     {
@@ -197,14 +203,23 @@ final readonly class Conditional
 
     /**
      * Whether this response can carry a validator.
+     *
+     * The stream, binary, and size rules all exist for one reason — a validator
+     * derived from the body means reading the whole body. They do not apply to
+     * a validator derived from the request, which costs nothing whatever the
+     * response turned out to be.
      */
-    private function eligible(Response $response): bool
+    private function eligible(Response $response, bool $requestDerived): bool
     {
-        if ($response instanceof StreamedResponse || $response instanceof BinaryFileResponse) {
+        if (! $response->isSuccessful() || $response->getEtag() !== null) {
             return false;
         }
 
-        if (! $response->isSuccessful() || $response->getEtag() !== null) {
+        if ($requestDerived) {
+            return true;
+        }
+
+        if ($response instanceof StreamedResponse || $response instanceof BinaryFileResponse) {
             return false;
         }
 
