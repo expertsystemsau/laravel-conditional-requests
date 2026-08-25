@@ -38,6 +38,10 @@ final readonly class Conditional
 
         $response->setEtag($validator->etag, $validator->weak);
 
+        // Symfony performs the RFC 9110 comparison and, on a match, mutates the
+        // response into a compliant 304 — status, empty body, stripped headers.
+        $response->isNotModified($request);
+
         return $response;
     }
 
