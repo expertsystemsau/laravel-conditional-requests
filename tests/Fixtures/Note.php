@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace ExpertSystems\ConditionalRequests\Tests\Fixtures;
 
+use ExpertSystems\ConditionalRequests\Concerns\HasConditionalValidator;
+use ExpertSystems\ConditionalRequests\Contracts\ProvidesConditionalValidator;
 use Illuminate\Database\Eloquent\Model;
 
 /**
@@ -13,7 +15,9 @@ use Illuminate\Database\Eloquent\Model;
  * @property int $id
  * @property string $body
  */
-class Note extends Model
+class Note extends Model implements ProvidesConditionalValidator
 {
+    use HasConditionalValidator;
+
     protected $guarded = [];
 }

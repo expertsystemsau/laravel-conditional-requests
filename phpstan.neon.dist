@@ -4,3 +4,14 @@ parameters:
         - src
         - config
     tmpDir: build/phpstan
+    ignoreErrors:
+        -
+            # HasConditionalValidator is a trait meant to be `use`d by consuming
+            # applications' Eloquent models, never by anything in src/ itself.
+            # PHPStan only analyses a trait as part of a class that uses it, so
+            # a trait with no use-site inside the analysed paths is reported as
+            # unused rather than analysed — see
+            # https://phpstan.org/error-identifiers/trait.unused. The trait's
+            # behaviour is covered by tests/Unit/HasConditionalValidatorTest.php.
+            identifier: trait.unused
+            path: src/Concerns/HasConditionalValidator.php
