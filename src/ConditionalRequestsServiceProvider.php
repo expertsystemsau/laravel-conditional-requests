@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace ExpertSystems\ConditionalRequests;
 
+use ExpertSystems\ConditionalRequests\Http\Middleware\Conditional;
 use ExpertSystems\ConditionalRequests\Validators\BodyHashStrategy;
 use Illuminate\Contracts\Config\Repository;
+use Illuminate\Routing\Router;
 use Illuminate\Support\ServiceProvider;
 
 class ConditionalRequestsServiceProvider extends ServiceProvider
@@ -31,6 +33,8 @@ class ConditionalRequestsServiceProvider extends ServiceProvider
             (string) $config->get('laravel-conditional-requests.hash', 'xxh128'),
             (bool) $config->get('laravel-conditional-requests.weak', false),
         ));
+
+        $this->app->make(Router::class)->aliasMiddleware('conditional', Conditional::class);
 
         $this->loadTranslationsFrom(__DIR__.'/../lang', 'laravel-conditional-requests');
 
