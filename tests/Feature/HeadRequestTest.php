@@ -5,6 +5,7 @@ declare(strict_types=1);
 use ExpertSystems\ConditionalRequests\Http\Middleware\Conditional;
 use Illuminate\Contracts\Http\Kernel;
 use Illuminate\Support\Facades\Route;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 beforeEach(function (): void {
     Route::middleware('conditional')->get('/articles', fn (): array => ['title' => 'Hello']);
@@ -70,6 +71,32 @@ it('sends no body on a HEAD request to an ineligible response under global place
 
     expect($response->getContent())->toBe('')
         ->and($response->headers->get('ETag'))->toBe('"application-owned"');
+});
+
+it('sends no body on a HEAD request to a file download under global placement', function (): void {
+    // BinaryFileResponse::setContent(null) is a no-op; its body suppression
+    // comes from prepare() zeroing maxlen for a HEAD request, and the method
+    // mutation is what stops that happening. Without re-preparing here the
+    // whole file is streamed in answer to a HEAD.
+    app(Kernel::class)->pushMiddleware(Conditional::class);
+
+    $path = tempnam(sys_get_temp_dir(), 'crt');
+    file_put_contents($path, str_repeat('a', 64));
+
+    Route::get('/download', fn (): BinaryFileResponse => new BinaryFileResponse($path));
+
+    $response = $this->head('/download');
+
+    // Buffer the send by hand: TestResponse::streamedContent() only learned
+    // about BinaryFileResponse after Laravel 12.0, and this has to hold on the
+    // whole supported matrix. The file has to outlive the send.
+    ob_start();
+    $response->baseResponse->sendContent();
+    $body = (string) ob_get_clean();
+
+    unlink($path);
+
+    expect($body)->toBe('');
 });
 
 it('gives an error response no validator and no body on a HEAD request', function (): void {

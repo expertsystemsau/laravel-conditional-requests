@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+use ExpertSystems\ConditionalRequests\Http\Middleware\Conditional;
+use Illuminate\Contracts\Http\Kernel;
 use Illuminate\Support\Facades\Route;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Symfony\Component\HttpFoundation\StreamedResponse;
@@ -89,6 +91,20 @@ it('skips routes excluded by name', function (): void {
     Route::middleware('conditional')->get('/admin/stats', fn () => response('body'))->name('admin.stats');
 
     $this->get('/admin/stats')->assertHeaderMissing('ETag');
+});
+
+it('skips routes excluded by name under global placement', function (): void {
+    // Global middleware runs before routing, so the pre-controller exclusion
+    // check sees no route and Request::routeIs() is false whatever the pattern.
+    // The exclusion has to be re-checked once routing has happened, or a
+    // route-name exclusion silently only works under route placement.
+    config()->set('laravel-conditional-requests.exclude', ['metrics.show']);
+
+    app(Kernel::class)->pushMiddleware(Conditional::class);
+
+    Route::get('/metrics', fn () => response('metrics payload'))->name('metrics.show');
+
+    $this->get('/metrics')->assertHeaderMissing('ETag');
 });
 
 it('skips routes excluded by URI pattern', function (): void {

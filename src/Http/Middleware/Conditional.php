@@ -55,7 +55,13 @@ final readonly class Conditional
             }
         }
 
-        if ($this->eligible($response)) {
+        // The exclusion is evaluated a second time on purpose. Under kernel-global
+        // placement the first check ran before routing, where $request->route() is
+        // null and Request::routeIs() answers false for every pattern, so a
+        // route-name exclusion could only ever be honoured here. The pre-$next()
+        // check still earns its place: it keeps a URI-excluded route a true
+        // pass-through with no request mutation at all.
+        if (! $this->excluded($request) && $this->eligible($response)) {
             // array_values() looks like a no-op and is one at runtime, but PHPStan
             // types a `string ...$flags` variadic as array<int<0,max>|string,
             // string> — a variadic can receive named arguments — so it is needed
@@ -66,7 +72,7 @@ final readonly class Conditional
         // Single exit, so every path applies the HEAD nulling. Under route or
         // group placement Router::runRoute()'s own prepareResponse (Router.php:799)
         // would do it again harmlessly; under global placement nothing else does.
-        return $isHead ? $this->withoutBody($response) : $response;
+        return $isHead ? $this->withoutBody($request, $response) : $response;
     }
 
     /**
@@ -96,8 +102,18 @@ final readonly class Conditional
      *
      * Mirrors what Symfony's Response::prepare() does for a HEAD request.
      */
-    private function withoutBody(Response $response): Response
+    private function withoutBody(Request $request, Response $response): Response
     {
+        // setContent(null) is a no-op on a BinaryFileResponse — its body is a
+        // file read at send time, suppressed by prepare() zeroing the read
+        // length for a HEAD request. That length is protected with no setter, so
+        // re-preparing against the restored method is how it gets zeroed: the
+        // same call Router::prepareResponse() already makes, this time seeing
+        // the method the client actually sent rather than our temporary GET.
+        if ($response instanceof BinaryFileResponse) {
+            return $response->prepare($request);
+        }
+
         $length = $response->headers->get('Content-Length');
 
         $response->setContent(null);
