@@ -18,15 +18,42 @@ function fixtureArticle(array $attributes): Article
     return (new Article)->forceFill($attributes);
 }
 
-it('derives a tag from the table, the key, and updated_at', function (): void {
+/**
+ * Register a connection a tenancy package would have swapped in.
+ *
+ * Nothing here ever opens it: conditionalValidator() reads the database name
+ * and the table prefix off the connection's configuration, so a path that does
+ * not exist is enough to stand in for another tenant's database.
+ */
+function tenantConnection(string $name, string $database = ':memory:', string $prefix = ''): void
+{
+    config()->set("database.connections.{$name}", [
+        'driver' => 'sqlite',
+        'database' => $database,
+        'prefix' => $prefix,
+    ]);
+}
+
+it('derives a tag from where the record lives, its key, and updated_at', function (): void {
+    $connection = (new Article)->getConnection();
+
     $validator = fixtureArticle([
         'id' => 1,
         'title' => 'Hello',
         'updated_at' => '2026-08-25 10:00:00',
     ])->conditionalValidator(Request::create('/articles/1'));
 
+    // The database name and the table prefix are in there because getTable()
+    // is the bare table name: without them every tenant of a
+    // database-per-tenant deployment shares one tag per record.
     expect($validator?->etag)->toBe(
-        hash('xxh128', implode("\0", ['articles', '1', '2026-08-25 10:00:00'])),
+        hash('xxh128', implode("\0", [
+            $connection->getDatabaseName(),
+            $connection->getTablePrefix(),
+            'articles',
+            '1',
+            '2026-08-25 10:00:00',
+        ])),
     );
 });
 
@@ -47,7 +74,15 @@ it('prefers an explicit version column over updated_at', function (): void {
         'updated_at' => '2026-08-25 10:00:00',
     ])->conditionalValidator(Request::create('/articles/1'));
 
-    expect($validator?->etag)->toBe(hash('xxh128', implode("\0", ['articles', '1', '7'])));
+    $connection = (new Article)->getConnection();
+
+    expect($validator?->etag)->toBe(hash('xxh128', implode("\0", [
+        $connection->getDatabaseName(),
+        $connection->getTablePrefix(),
+        'articles',
+        '1',
+        '7',
+    ])));
 });
 
 it('falls back to updated_at when the version column is null', function (): void {
@@ -79,6 +114,48 @@ it('gives records in different tables different tags for the same key and timest
 
     expect($article->conditionalValidator($request)?->etag)
         ->not->toBe($note->conditionalValidator($request)?->etag);
+});
+
+it('gives records in different databases different tags for the same key and version', function (): void {
+    // Database-per-tenant: one URL, one table, one key, one version, two
+    // tenants. Without the database name in the fingerprint a client that
+    // cached tenant A's copy is handed a 304 for tenant B's.
+    tenantConnection('tenant_a', database: '/tenant-a.sqlite');
+    tenantConnection('tenant_b', database: '/tenant-b.sqlite');
+
+    $request = Request::create('/articles/1');
+
+    $a = fixtureArticle(['id' => 1, 'version' => 1])->setConnection('tenant_a');
+    $b = fixtureArticle(['id' => 1, 'version' => 1])->setConnection('tenant_b');
+
+    expect($a->conditionalValidator($request)?->etag)
+        ->not->toBeNull()
+        ->not->toBe($b->conditionalValidator($request)?->etag);
+});
+
+it('gives records under different table prefixes different tags for the same key and version', function (): void {
+    // Prefix-per-tenant: the same database, so the prefix is the only thing
+    // separating the two records — and the only thing that can separate the
+    // two tags.
+    tenantConnection('shared_a', prefix: 'tenant_a_');
+    tenantConnection('shared_b', prefix: 'tenant_b_');
+
+    $request = Request::create('/articles/1');
+
+    $a = fixtureArticle(['id' => 1, 'version' => 1])->setConnection('shared_a');
+    $b = fixtureArticle(['id' => 1, 'version' => 1])->setConnection('shared_b');
+
+    expect($a->conditionalValidator($request)?->etag)
+        ->not->toBeNull()
+        ->not->toBe($b->conditionalValidator($request)?->etag);
+});
+
+it('keeps the tag stable while the database, the prefix, and the version all hold', function (): void {
+    $request = Request::create('/articles/1');
+
+    expect(fixtureArticle(['id' => 1, 'version' => 1])->conditionalValidator($request)?->etag)
+        ->not->toBeNull()
+        ->toBe(fixtureArticle(['id' => 1, 'version' => 1])->conditionalValidator($request)?->etag);
 });
 
 it('declines to produce a validator for an unsaved record', function (): void {
