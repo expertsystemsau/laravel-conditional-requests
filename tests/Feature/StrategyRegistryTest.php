@@ -65,5 +65,15 @@ it('builds the model strategy from configuration', function (): void {
 });
 
 it('rejects an unknown strategy by name', function (): void {
-    app(ConditionalRequests::class)->strategy('nope');
-})->throws(InvalidArgumentException::class, 'Conditional request strategy [nope] is not registered. Registered: body, model');
+    // The message must name the strategy that was asked for and point at what
+    // is available, without this test pinning the full registered list — a
+    // fourth built-in strategy is a feature, not a reason for this to fail.
+    // tests/Feature/CustomStrategyTest.php makes the same promise the same way.
+    expect(fn () => app(ConditionalRequests::class)->strategy('nope'))
+        ->toThrow(function (InvalidArgumentException $e): void {
+            expect($e->getMessage())
+                ->toContain('[nope] is not registered')
+                ->toContain('Registered:')
+                ->toContain('body');
+        });
+});

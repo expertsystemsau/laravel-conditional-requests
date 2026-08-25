@@ -47,6 +47,7 @@ it('derives the validator from the bound model', function (): void {
     $request = routedRequest('/articles/1', '/articles/{article}', ['article' => $article]);
 
     expect((new ModelStrategy)->fromRequest($request)?->etag)
+        ->not->toBeNull()
         ->toBe($article->conditionalValidator($request)?->etag);
 });
 
@@ -55,6 +56,7 @@ it('returns the same validator from fromResponse', function (): void {
     $strategy = new ModelStrategy;
 
     expect($strategy->fromResponse($request, new Response('rendered body'))?->etag)
+        ->not->toBeNull()
         ->toBe($strategy->fromRequest($request)?->etag);
 });
 
@@ -68,6 +70,7 @@ it('takes the first route parameter implementing the contract', function (): voi
     ]);
 
     expect((new ModelStrategy)->fromRequest($request)?->etag)
+        ->not->toBeNull()
         ->toBe($article->conditionalValidator($request)?->etag);
 });
 
