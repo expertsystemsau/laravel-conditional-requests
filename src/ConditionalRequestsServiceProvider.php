@@ -6,6 +6,7 @@ namespace ExpertSystems\ConditionalRequests;
 
 use ExpertSystems\ConditionalRequests\Http\Middleware\Conditional;
 use ExpertSystems\ConditionalRequests\Validators\BodyHashStrategy;
+use ExpertSystems\ConditionalRequests\Validators\ModelStrategy;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Routing\Router;
 use Illuminate\Support\ServiceProvider;
@@ -36,6 +37,15 @@ class ConditionalRequestsServiceProvider extends ServiceProvider
 
             return new BodyHashStrategy(
                 (string) $config->get('laravel-conditional-requests.hash'),
+                (bool) $config->get('laravel-conditional-requests.weak'),
+            );
+        });
+
+        $this->app->make(ConditionalRequests::class)->extend('model', function (): ModelStrategy {
+            // Resolved per call for the same reason `body` is — see above.
+            $config = app(Repository::class);
+
+            return new ModelStrategy(
                 (bool) $config->get('laravel-conditional-requests.weak'),
             );
         });

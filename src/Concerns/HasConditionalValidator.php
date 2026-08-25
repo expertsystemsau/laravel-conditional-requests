@@ -21,6 +21,13 @@ use Illuminate\Http\Request;
  * strong comparison for If-Match, so a weak tag here would reject every
  * guarded write on the v0.3 write path.
  *
+ * conditionalValidator() receives $request (see ProvidesConditionalValidator),
+ * but this trait does not thread it any further: conditionalVersionColumns(),
+ * the extension point below, only names columns and has no access to the
+ * request. An application that needs to fold request-dependent state —
+ * content negotiation, sparse fieldsets, includes — into the tag has to
+ * override conditionalValidator() itself rather than conditionalVersionColumns().
+ *
  * @phpstan-require-extends Model
  */
 trait HasConditionalValidator
@@ -65,9 +72,15 @@ trait HasConditionalValidator
     /**
      * The first usable version token on the record.
      *
-     * Raw attributes are read rather than cast ones: the raw value is exactly
-     * what the column holds, at exactly the precision it holds it, and it never
-     * shifts because an application added a cast or an accessor for display.
+     * Raw attributes are read rather than cast ones: for a primitive cast the
+     * raw value is exactly what the column holds, at exactly the precision it
+     * holds it, and does not shift because an application added a cast or an
+     * accessor for display. That does not hold for an enum- or class-castable
+     * column: Model::getAttributes() calls mergeAttributesFromCachedCasts(),
+     * which writes the cast's serialized form back into the raw attribute
+     * array once that accessor has been touched earlier in the same request —
+     * so the value read here can still shift mid-request for those cast types.
+     * Point conditionalVersionColumns() at one only if that is acceptable.
      */
     private function conditionalVersion(): ?string
     {

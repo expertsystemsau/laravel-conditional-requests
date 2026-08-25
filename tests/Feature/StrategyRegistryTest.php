@@ -4,9 +4,13 @@ declare(strict_types=1);
 
 use ExpertSystems\ConditionalRequests\ConditionalRequests;
 use ExpertSystems\ConditionalRequests\Contracts\ValidatorStrategy;
+use ExpertSystems\ConditionalRequests\Tests\Fixtures\Article;
 use ExpertSystems\ConditionalRequests\Validators\BodyHashStrategy;
+use ExpertSystems\ConditionalRequests\Validators\ModelStrategy;
 use ExpertSystems\ConditionalRequests\Validators\Validator;
 use Illuminate\Http\Request;
+use Illuminate\Routing\Middleware\SubstituteBindings;
+use Illuminate\Support\Facades\Route;
 use Symfony\Component\HttpFoundation\Response;
 
 it('registers the body strategy out of the box', function (): void {
@@ -42,6 +46,24 @@ it('accepts a custom strategy', function (): void {
     expect($validator?->etag)->toBe('fixed-tag');
 });
 
+it('registers the model strategy out of the box', function (): void {
+    expect(app(ConditionalRequests::class)->strategy('model'))
+        ->toBeInstanceOf(ModelStrategy::class);
+});
+
+it('builds the model strategy from configuration', function (): void {
+    config()->set('laravel-conditional-requests.weak', true);
+
+    $article = (new Article)->forceFill(['id' => 1, 'updated_at' => '2026-08-25 10:00:00']);
+
+    Route::middleware([SubstituteBindings::class, 'conditional:model'])
+        ->get('/articles/{article}', fn (): array => ['title' => 'Hello']);
+
+    Route::bind('article', fn (): Article => $article);
+
+    expect($this->get('/articles/1')->headers->get('ETag'))->toStartWith('W/"');
+});
+
 it('rejects an unknown strategy by name', function (): void {
     app(ConditionalRequests::class)->strategy('nope');
-})->throws(InvalidArgumentException::class, 'Conditional request strategy [nope] is not registered. Registered: body');
+})->throws(InvalidArgumentException::class, 'Conditional request strategy [nope] is not registered. Registered: body, model');
