@@ -15,9 +15,12 @@ it('attaches an ETag to a successful response', function (): void {
 });
 
 it('attaches a strong ETag by default', function (): void {
-    $etag = $this->get('/articles')->headers->get('ETag');
+    $response = $this->get('/articles');
 
-    expect($etag)->toStartWith('"')->not->toStartWith('W/');
+    // Asserting the exact wire value covers all three claims at once: quoted,
+    // unprefixed (so strong), and hashed with the configured default algorithm.
+    expect($response->headers->get('ETag'))
+        ->toBe('"'.hash('xxh128', (string) $response->getContent()).'"');
 });
 
 it('attaches a weak ETag when configured to', function (): void {

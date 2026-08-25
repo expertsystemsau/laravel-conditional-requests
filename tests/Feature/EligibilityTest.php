@@ -106,3 +106,13 @@ it('still tags a route that matches no exclusion', function (): void {
 
     $this->get('/articles')->assertHeader('ETag');
 });
+
+it('skips an empty-body 2xx response', function (): void {
+    Route::middleware('conditional')->get('/articles/1', fn () => response()->noContent());
+
+    $response = $this->get('/articles/1');
+
+    expect($response->status())->toBe(204)
+        ->and($response->headers->get('ETag'))->toBeNull()
+        ->and($response->getContent())->toBe('');
+});

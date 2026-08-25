@@ -40,6 +40,12 @@ it('treats a bare wildcard as a match', function (): void {
 });
 
 it('ignores a malformed If-None-Match rather than failing', function (): void {
-    $this->get('/articles', ['If-None-Match' => 'not a valid tag'])
-        ->assertOk();
+    // Symfony's Request::getETags() comma-splits the raw header without
+    // validating it, so an unparseable value is indistinguishable from a
+    // non-matching tag. What this covers is that garbage input is not fatal and
+    // still yields a complete, freshly tagged 200 — not a separate parse path.
+    $this->get('/articles', ['If-None-Match' => '"unterminated, W/, ***'])
+        ->assertOk()
+        ->assertHeader('ETag')
+        ->assertJson(['title' => 'Hello']);
 });
