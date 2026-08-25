@@ -85,11 +85,14 @@ trait HasConditionalValidator
         $connection = $this->getConnection();
 
         // A connection configured without a database name — some drivers do not
-        // need one — contributes an empty component rather than dropping out of
-        // the fingerprint, so the position of every later component holds.
+        // need one — or without a prefix contributes an empty component rather
+        // than dropping out of the fingerprint, so the position of every later
+        // component holds. Both are @return string docblocks over untyped
+        // properties that the same ConnectionFactory route can leave null, so
+        // both are cast: without that this method's list<string> is untrue.
         return [
             (string) $connection->getDatabaseName(),
-            $connection->getTablePrefix(),
+            (string) $connection->getTablePrefix(),
             $this->getTable(),
         ];
     }

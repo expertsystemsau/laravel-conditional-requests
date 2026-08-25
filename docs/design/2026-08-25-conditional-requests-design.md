@@ -74,7 +74,7 @@ Therefore:
 | `Validators/ModelStrategy` | Pre-controller. From a route-bound model. Strong. |
 | `Preconditions/PreconditionEvaluator` | Our own `If-Match` / `If-Unmodified-Since` evaluation, strong comparison. |
 | `Contracts/ProvidesConditionalValidator` | Model-side contract. |
-| `Concerns/HasConditionalValidator` | Default trait implementation from the table, key, and either a `version` column or `updated_at`. |
+| `Concerns/HasConditionalValidator` | Default trait implementation from the connection's database name and table prefix, the table, the key, and either a `version` column or `updated_at`. |
 | `Exceptions/PreconditionFailedException` | `HttpException` subclass, 412. |
 | `Exceptions/PreconditionRequiredException` | `HttpException` subclass, 428. |
 
