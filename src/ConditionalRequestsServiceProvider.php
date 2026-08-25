@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace ExpertSystems\ConditionalRequests;
 
-use ExpertSystems\ConditionalRequests\Console\Commands\ConditionalRequestsCommand;
 use Illuminate\Support\ServiceProvider;
 
 class ConditionalRequestsServiceProvider extends ServiceProvider
@@ -41,9 +40,5 @@ class ConditionalRequestsServiceProvider extends ServiceProvider
         $this->publishes([
             __DIR__.'/../public' => public_path('vendor/laravel-conditional-requests'),
         ], ['laravel-conditional-requests', 'laravel-conditional-requests-assets']);
-
-        $this->commands([
-            ConditionalRequestsCommand::class,
-        ]);
     }
 }
