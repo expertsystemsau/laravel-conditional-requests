@@ -8,8 +8,13 @@ use Closure;
 use ExpertSystems\ConditionalRequests\ConditionalRequests;
 use ExpertSystems\ConditionalRequests\Contracts\RequestValidatorStrategy;
 use ExpertSystems\ConditionalRequests\Contracts\ValidatorStrategy;
+use ExpertSystems\ConditionalRequests\Exceptions\PreconditionFailedException;
+use ExpertSystems\ConditionalRequests\Exceptions\PreconditionRequiredException;
+use ExpertSystems\ConditionalRequests\Preconditions\PreconditionEvaluator;
+use ExpertSystems\ConditionalRequests\Preconditions\PreconditionOutcome;
 use ExpertSystems\ConditionalRequests\Validators\Validator;
 use Illuminate\Contracts\Config\Repository;
+use Illuminate\Contracts\Translation\Translator;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response as IlluminateResponse;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
@@ -24,6 +29,8 @@ final readonly class Conditional
     public function __construct(
         private ConditionalRequests $registry,
         private Repository $config,
+        private PreconditionEvaluator $evaluator,
+        private Translator $translator,
     ) {}
 
     /**
@@ -31,6 +38,21 @@ final readonly class Conditional
      */
     public function handle(Request $request, Closure $next, string ...$flags): Response
     {
+        // array_values() looks like a no-op and is one at runtime, but PHPStan
+        // types a `string ...$flags` variadic as array<int<0,max>|string,
+        // string> — a variadic can receive named arguments — so it is needed
+        // to satisfy the list<string> parameter below. Do not remove it.
+        $parsed = Flags::parse(array_values($flags));
+
+        // RFC 9110 §13 splits here and the two halves never mix: an unsafe
+        // method is guarded before the controller runs and never receives a
+        // validator of its own, and a safe one takes the read path exactly as
+        // it did in v0.1 and v0.2. isMethodSafe() is Symfony's own list —
+        // GET, HEAD, OPTIONS, TRACE, and the draft QUERY method.
+        if (! $request->isMethodSafe()) {
+            return $this->write($request, $next, $parsed);
+        }
+
         // Everything that can be decided from the request alone is decided here,
         // before the request is touched, so `enabled => false` really is a
         // pass-through and the controller sees the method the client sent.
@@ -38,11 +60,7 @@ final readonly class Conditional
             return $next($request);
         }
 
-        // array_values() looks like a no-op and is one at runtime, but PHPStan
-        // types a `string ...$flags` variadic as array<int<0,max>|string,
-        // string> — a variadic can receive named arguments — so it is needed
-        // to satisfy the list<string> parameter below. Do not remove it.
-        $strategy = $this->registry->strategy($this->strategyName(array_values($flags)));
+        $strategy = $this->registry->strategy($this->strategyName($parsed));
 
         // A strategy that answers from the request alone changes two things: the
         // validator is known before the controller runs, and the rendered body
@@ -111,6 +129,49 @@ final readonly class Conditional
         // declared outside `conditional` ever sees a HEAD response still
         // carrying the body the controller wrote.
         return $isHead ? $this->withoutBody($request, $response) : $response;
+    }
+
+    /**
+     * Guard an unsafe request against the resource's current validator.
+     *
+     * Everything here happens before $next(). The point of the write path is to
+     * refuse a write that would clobber someone else's, and a refusal issued
+     * after the controller has run is not a refusal — the update is already
+     * lost. Nothing downstream ever sees a request whose precondition failed.
+     *
+     * @param  Closure(Request): Response  $next
+     */
+    private function write(Request $request, Closure $next, Flags $flags): Response
+    {
+        // The write path checks the exclusions once, not twice as the read path
+        // does. It has no second chance by construction: the decision must
+        // precede the controller, so a route-name exclusion cannot be honoured
+        // under kernel-global placement, where nothing has been routed yet.
+        if (! $this->enabled() || $this->excluded($request)) {
+            return $next($request);
+        }
+
+        $strategy = $this->registry->strategy($this->strategyName($flags));
+
+        if (! $strategy instanceof RequestValidatorStrategy) {
+            // A body hash describes a response that does not exist yet, so
+            // there is nothing to compare and nothing this path can guard. The
+            // request passes through unchanged rather than failing every
+            // precondition against a validator that is permanently null.
+            return $next($request);
+        }
+
+        $current = $strategy->fromRequest($request);
+
+        return match ($this->evaluator->evaluate($request, $current, $flags->required)) {
+            PreconditionOutcome::Failed => throw new PreconditionFailedException(
+                $this->message(PreconditionFailedException::MESSAGE_KEY),
+            ),
+            PreconditionOutcome::Required => throw new PreconditionRequiredException(
+                $this->message(PreconditionRequiredException::MESSAGE_KEY),
+            ),
+            PreconditionOutcome::Passed => $next($request),
+        };
     }
 
     /**
@@ -275,12 +336,10 @@ final readonly class Conditional
 
     /**
      * The strategy this route asked for, or the configured default.
-     *
-     * @param  list<string>  $flags
      */
-    private function strategyName(array $flags): string
+    private function strategyName(Flags $flags): string
     {
-        return Flags::parse($flags)->strategyOr(
+        return $flags->strategyOr(
             (string) $this->config->get('laravel-conditional-requests.strategy'),
         );
     }
@@ -293,7 +352,7 @@ final readonly class Conditional
      */
     private function requestEligible(Request $request): bool
     {
-        if (! (bool) $this->config->get('laravel-conditional-requests.enabled')) {
+        if (! $this->enabled()) {
             return false;
         }
 
@@ -363,6 +422,26 @@ final readonly class Conditional
         }
 
         return $request->routeIs(...$patterns) || $request->is(...$patterns);
+    }
+
+    /**
+     * The master switch, honoured by both paths.
+     */
+    private function enabled(): bool
+    {
+        return (bool) $this->config->get('laravel-conditional-requests.enabled');
+    }
+
+    /**
+     * A translated message, or an empty string when the key resolves to
+     * something that is not one — Symfony then renders the status code's own
+     * reason phrase rather than an array cast into nonsense.
+     */
+    private function message(string $key): string
+    {
+        $message = $this->translator->get($key);
+
+        return is_string($message) ? $message : '';
     }
 
     /**
