@@ -213,8 +213,40 @@ it('requires a precondition on a required route that carries none', function ():
         ->toBe(PreconditionOutcome::Required);
 });
 
-it('treats a blank If-Match header as absent', function (): void {
+it('refuses a blank If-Match rather than treating it as absent', function (): void {
+    // §5.6.1 gives an empty list zero members, so nothing can match and §13.1.1
+    // makes the condition false: a present-but-blank If-Match is a precondition
+    // that cannot hold, not a missing one. This test previously asserted the
+    // opposite, from the task brief; the brief's rule was wrong. On a route
+    // without `required` the collapse to "absent" let a client templating
+    // `If-Match: ${etag}` with an empty variable clobber the record it had
+    // asked to be guarded against.
+    expect((new PreconditionEvaluator)->evaluate(guardedRequest(['If-Match' => '   ']), new Validator('abc'), false))
+        ->toBe(PreconditionOutcome::Failed);
+});
+
+it('refuses a blank If-Match on a required route too', function (): void {
     expect((new PreconditionEvaluator)->evaluate(guardedRequest(['If-Match' => '   ']), new Validator('abc'), true))
+        ->toBe(PreconditionOutcome::Failed);
+});
+
+it('answers a blank If-Match and a comma only If-Match the same way', function (): void {
+    // Both are "header present, zero valid members". `,` already answered 412;
+    // a rule that separates the two is one nobody can predict.
+    $evaluator = new PreconditionEvaluator;
+
+    expect($evaluator->evaluate(guardedRequest(['If-Match' => '']), new Validator('abc'), false))
+        ->toBe(PreconditionOutcome::Failed)
+        ->and($evaluator->evaluate(guardedRequest(['If-Match' => ',']), new Validator('abc'), false))
+        ->toBe(PreconditionOutcome::Failed);
+});
+
+it('still treats a blank If-None-Match as absent', function (): void {
+    // The other side is deliberately unchanged. Zero members means nothing
+    // matched, which satisfies §13.1.2 either way, so the collapse costs
+    // nothing here — and on a required route it is the safer reading: a field
+    // value naming no versions is not the precondition that route demands.
+    expect((new PreconditionEvaluator)->evaluate(guardedRequest(['If-None-Match' => '   ']), new Validator('abc'), true))
         ->toBe(PreconditionOutcome::Required);
 });
 

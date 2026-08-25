@@ -39,7 +39,7 @@ final readonly class PreconditionEvaluator
      */
     public function evaluate(Request $request, ?Validator $current, bool $required): PreconditionOutcome
     {
-        $ifMatch = $this->header($request, 'If-Match');
+        $ifMatch = $this->sentHeader($request, 'If-Match');
 
         if ($ifMatch !== null) {
             return $this->outcome($this->isWildcard($ifMatch)
@@ -104,10 +104,37 @@ final readonly class PreconditionEvaluator
     }
 
     /**
+     * A header's value as the client sent it, or null only when the client did
+     * not send the header at all.
+     *
+     * `If-Match = "*" / #entity-tag`, and §5.6.1 gives an empty list zero
+     * members, so a present-but-blank field value is a precondition naming no
+     * versions rather than no precondition. Nothing can match zero members,
+     * §13.1.1 makes the condition false, and the answer is 412. Collapsing it
+     * to "absent" instead is what let `If-Match:` with an empty value — a
+     * client templating an etag variable that came out empty — sail past the
+     * guard it had asked for and clobber the record. `If-Match: ,` is the same
+     * state spelled differently and already answered 412; the two must not
+     * disagree.
+     */
+    private function sentHeader(Request $request, string $name): ?string
+    {
+        if (! $request->headers->has($name)) {
+            return null;
+        }
+
+        return (string) $request->headers->get($name);
+    }
+
+    /**
      * A header's value, or null when it is absent or blank.
      *
-     * A present-but-blank header carries no precondition, so it is treated as
-     * absent rather than as a precondition that cannot hold.
+     * If-None-Match alone reads its field value this way. Zero members there
+     * means nothing matched, which satisfies §13.1.2 either way, so the
+     * collapse costs nothing on an unguarded route and is the safer reading on
+     * a `required` one: a field value naming no versions is not the
+     * precondition that route demands, and 428 asks for a real one. It is also
+     * what Symfony's Request::getETags() effectively does on the read path.
      */
     private function header(Request $request, string $name): ?string
     {

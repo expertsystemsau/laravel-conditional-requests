@@ -140,6 +140,24 @@ it('still refuses a stale If-Match on a route without required', function (): vo
     $this->put('/articles/1', [], ['If-Match' => '"stale-tag"'])->assertStatus(412);
 });
 
+it('refuses a blank If-Match and leaves the record alone', function (): void {
+    // The realistic shape is a client templating `If-Match: ${etag}` with an
+    // empty variable. It asked to be guarded; collapsing the blank header to
+    // "absent" let the write through unguarded on a route without `required`
+    // and the record was clobbered. `If-Match: ,` is the same state — header
+    // present, zero valid members — and already answered 412.
+    Route::middleware([SubstituteBindings::class, 'conditional:model'])
+        ->patch('/articles/{article}', function (Article $article): array {
+            $article->update(['title' => 'Clobbered']);
+
+            return ['title' => $article->title];
+        });
+
+    $this->patch('/articles/1', [], ['If-Match' => ''])->assertStatus(412);
+
+    expect(Article::query()->findOrFail(1)->title)->toBe('Hello');
+});
+
 it('leaves the read path on the same URI untouched', function (): void {
     guardedArticleRoutes($runs);
 
