@@ -120,7 +120,27 @@ final readonly class Conditional
 
         // Symfony performs the RFC 9110 comparison and, on a match, mutates the
         // response into a compliant 304 — status, empty body, stripped headers.
-        $response->isNotModified($request);
+        if ($response->isNotModified($request)) {
+            $this->complete($request, $response);
+        }
+    }
+
+    /**
+     * Finish a 304 the way the framework would have, wherever we sit.
+     *
+     * Response::prepare()'s empty-response branch nulls the content, strips
+     * Content-Type and Content-Length, and clears PHP's `default_mimetype` ini
+     * setting — the last of which is what stops the SAPI adding a Content-Type
+     * of its own to a bodiless response. Under route or group placement
+     * Router::prepareResponse() runs after this middleware and does it anyway;
+     * under kernel-global placement nothing re-prepares, and RFC 9111 §4.3.4
+     * has a cache adopt the 304's headers, so a leaked text/html would
+     * overwrite the application/json a client had stored. Preparing a second
+     * time changes nothing, so both placements simply call it.
+     */
+    private function complete(Request $request, Response $response): Response
+    {
+        return $response->prepare($request);
     }
 
     /**
@@ -147,7 +167,7 @@ final readonly class Conditional
         $response = new IlluminateResponse;
         $response->setEtag($validator->etag, $validator->weak);
 
-        return $response->isNotModified($request) ? $response : null;
+        return $response->isNotModified($request) ? $this->complete($request, $response) : null;
     }
 
     /**

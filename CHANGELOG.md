@@ -22,6 +22,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Every model-derived `ETag` value changes: the connection's database name and table prefix are now part of the fingerprint, so the same key and version cannot collide across the tenants of a database-per-tenant or prefix-per-tenant deployment. No released version emitted a model-derived tag, so no released baseline is invalidated, but a dev checkout tracking `main` will see every one of its tags change at once and miss on the first request after upgrading.
 - A misconfigured `hash` value now fails on every eligible request rather than only on those that reached the tagging step. The strategy is constructed before `$next()` so the short-circuit can consult it, and `BodyHashStrategy` validates the algorithm in its constructor — so a request that ends in a `404`, a stream, or an oversized body now surfaces the same misconfiguration those requests used to pass over. Failing fast is the better behaviour, but it is a behaviour change.
 
+### Fixed
+
+- A `304` the middleware produces is now prepared, so it leaves without a `Content-Type`. Symfony's `Response::prepare()` clears PHP's `default_mimetype` for an empty response, and that is what stops the SAPI adding one; under route or group placement `Router::prepareResponse()` ran afterwards and did it, but under kernel-global placement nothing re-prepared and the `304` went out as `text/html; charset=UTF-8`. RFC 9111 §4.3.4 has a cache update its stored headers from the `304`, so a client holding an `application/json` entry had its stored content type overwritten on the first successful revalidation.
+
 ## v0.1.0
 
 ### Added
