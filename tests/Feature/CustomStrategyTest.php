@@ -64,8 +64,13 @@ it('fails loudly when a flag names a strategy nobody registered', function (): v
 
     $this->withoutExceptionHandling();
 
-    $this->get('/articles');
-})->throws(
-    InvalidArgumentException::class,
-    'Conditional request strategy [not-registered] is not registered. Registered: body, flag-probe, config-probe',
-);
+    // The message must name the strategy that was asked for and point at what
+    // is available, without this test pinning the full registered list — a
+    // fourth built-in strategy is a feature, not a reason for this to fail.
+    expect(fn () => $this->get('/articles'))->toThrow(function (InvalidArgumentException $e): void {
+        expect($e->getMessage())
+            ->toContain('[not-registered] is not registered')
+            ->toContain('Registered:')
+            ->toContain('body');
+    });
+});

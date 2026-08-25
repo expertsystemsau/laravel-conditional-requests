@@ -6,7 +6,6 @@ namespace ExpertSystems\ConditionalRequests;
 
 use ExpertSystems\ConditionalRequests\Http\Middleware\Conditional;
 use ExpertSystems\ConditionalRequests\Validators\BodyHashStrategy;
-use Illuminate\Container\Container;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Routing\Router;
 use Illuminate\Support\ServiceProvider;
@@ -33,7 +32,7 @@ class ConditionalRequestsServiceProvider extends ServiceProvider
             // Under Octane an app that lists `config` in `octane.flush` would
             // otherwise leave this closure reading a stale Repository while the
             // middleware reads the sandbox's own — split-brain configuration.
-            $config = Container::getInstance()->make(Repository::class);
+            $config = app(Repository::class);
 
             return new BodyHashStrategy(
                 (string) $config->get('laravel-conditional-requests.hash'),
