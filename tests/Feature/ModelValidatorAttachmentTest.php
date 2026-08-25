@@ -108,6 +108,30 @@ it('attaches a request-derived validator to a response over the size ceiling', f
     expect($this->get('/large')->headers->get('ETag'))->toBe('"large-tag"');
 });
 
+it('does not suppress the size ceiling for a strategy that could not answer early', function (): void {
+    config()->set('laravel-conditional-requests.max_response_bytes', 8);
+
+    ConditionalRequests::extend('declining', fn (): ValidatorStrategy => decliningStrategy());
+
+    Route::middleware('conditional:declining')->get('/large', fn () => response(str_repeat('a', 64)));
+
+    // Implementing RequestValidatorStrategy is not the claim; producing a
+    // validator is. This one declines before the controller, so fromResponse()
+    // is asked the ordinary way — against exactly the response the ceiling
+    // exists to keep out of a hash.
+    $this->get('/large')->assertHeaderMissing('ETag');
+});
+
+it('does not suppress the streamed-response rule for a strategy that could not answer early', function (): void {
+    ConditionalRequests::extend('declining', fn (): ValidatorStrategy => decliningStrategy());
+
+    Route::middleware('conditional:declining')->get('/stream', fn (): StreamedResponse => new StreamedResponse(function (): void {
+        echo 'chunk';
+    }));
+
+    $this->get('/stream')->assertHeaderMissing('ETag');
+});
+
 it('still skips a response that already carries an ETag', function (): void {
     ConditionalRequests::extend('probe-request', fn (): ValidatorStrategy => fixedRequestTagStrategy('ours'));
 
@@ -143,3 +167,24 @@ it('hands the controller a real HEAD request under a request-derived strategy', 
         ->and($response->getContent())->toBe('')
         ->and($response->headers->get('ETag'))->toBe('"head-tag"');
 });
+
+/**
+ * A strategy of the shape the README invites: answer from the request when it
+ * can, hash the rendered body when it cannot. The declining half is the one
+ * under test, so it always declines.
+ */
+function decliningStrategy(): RequestValidatorStrategy
+{
+    return new class implements RequestValidatorStrategy
+    {
+        public function fromRequest(Request $request): ?Validator
+        {
+            return null;
+        }
+
+        public function fromResponse(Request $request, Response $response): ?Validator
+        {
+            return new Validator(hash('xxh128', (string) $response->getContent()));
+        }
+    };
+}

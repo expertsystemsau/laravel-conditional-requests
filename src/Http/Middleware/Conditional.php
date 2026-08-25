@@ -46,8 +46,9 @@ final readonly class Conditional
 
         // A strategy that can answer from the request alone changes two things:
         // the validator is known before the controller runs, and the rendered
-        // body is never needed — so neither the HEAD method mutation nor the
-        // body-shaped skip rules apply to it.
+        // body is never needed for it — so the HEAD method mutation does not
+        // apply. The body-shaped skip rules key off the validator it actually
+        // produced rather than off the interface: see eligible().
         $requestDerived = $strategy instanceof RequestValidatorStrategy;
         $validator = $requestDerived ? $strategy->fromRequest($request) : null;
 
@@ -86,7 +87,7 @@ final readonly class Conditional
         // route-name exclusion could only ever be honoured here. The pre-$next()
         // check still earns its place: it keeps a URI-excluded route a true
         // pass-through with no request mutation at all.
-        if (! $this->excluded($request) && $this->eligible($response, $requestDerived)) {
+        if (! $this->excluded($request) && $this->eligible($response, $validator instanceof Validator)) {
             $this->attach($request, $response, $strategy, $validator);
         }
 
@@ -205,17 +206,23 @@ final readonly class Conditional
      * Whether this response can carry a validator.
      *
      * The stream, binary, and size rules all exist for one reason — a validator
-     * derived from the body means reading the whole body. They do not apply to
-     * a validator derived from the request, which costs nothing whatever the
-     * response turned out to be.
+     * derived from the body means reading the whole body. They are suppressed
+     * only when a validator is already in hand, because that one demonstrably
+     * cost nothing whatever the response turned out to be.
+     *
+     * Implementing RequestValidatorStrategy is not enough on its own. A
+     * strategy that answers from the request when it can and returns null when
+     * it cannot reaches attach() with nothing, and fromResponse() is then asked
+     * for a validator the ordinary way — so it faces the same rules every other
+     * response-derived validator faces.
      */
-    private function eligible(Response $response, bool $requestDerived): bool
+    private function eligible(Response $response, bool $held): bool
     {
         if (! $response->isSuccessful() || $response->getEtag() !== null) {
             return false;
         }
 
-        if ($requestDerived) {
+        if ($held) {
             return true;
         }
 

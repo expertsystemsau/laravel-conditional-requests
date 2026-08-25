@@ -15,19 +15,20 @@ use Illuminate\Http\Request;
  * If-None-Match is answered without ever invoking the route action. A strategy
  * that only implements ValidatorStrategy is simply never asked.
  *
- * Implementing this interface is a claim about the strategy, not just about
- * fromRequest(): the middleware reads it as permission to skip its
- * streamed/binary/size-ceiling checks on fromResponse() as well, since those
- * checks exist only to avoid reading a body a request-derived strategy should
- * never need. fromResponse() must honour that claim — never fall back to
- * hashing the rendered body, a stream, or a binary file — or a response the
- * ceiling was meant to protect gets read anyway on the fallback path.
+ * fromRequest() answering suppresses the middleware's streamed/binary/
+ * size-ceiling checks for that response: those checks exist only to avoid
+ * reading a body, and a validator already in hand cost no body read. The
+ * suppression follows the answer, not the interface — return null and
+ * fromResponse() is asked the ordinary way, under every one of those rules. A
+ * strategy is free to answer early when it can and hash the body when it
+ * cannot; the cost of the second path is simply that an oversized, streamed, or
+ * binary response goes untagged, exactly as it would under `body`.
  *
- * A route whose validator can answer before the controller runs also skips
- * everything the controller would otherwise decide before a 304 is sent,
- * per-record authorization included. Place `conditional` after authorization
- * middleware on any route using such a strategy, the same way the `model`
- * strategy requires (see the README).
+ * A route whose validator can answer before the controller runs skips
+ * everything the controller and any later middleware would otherwise decide
+ * before a 304 is sent — per-record authorization, signed URLs, subscription
+ * and feature gates. Place `conditional` after any middleware that can reject
+ * the request, the same way the `model` strategy requires (see the README).
  */
 interface RequestValidatorStrategy extends ValidatorStrategy
 {
