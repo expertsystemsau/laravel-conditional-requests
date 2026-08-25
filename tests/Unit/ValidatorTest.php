@@ -44,6 +44,14 @@ it('rejects a tag containing a double quote', function (): void {
     new Validator('abc"123');
 })->throws(InvalidArgumentException::class, 'contains a double quote');
 
+it('rejects a tag containing a comma', function (): void {
+    // Legal etagc, but If-Match and If-None-Match carry a #entity-tag list, so
+    // an echoed tag holding one splits into two malformed members that can
+    // never match — a permanent 412 on the resource. Unreachable through the
+    // package's hex-emitting strategies; reachable through a custom one.
+    new Validator('a,b');
+})->throws(InvalidArgumentException::class, 'contains a comma');
+
 it('rejects a tag containing a control character', function (): void {
     new Validator("abc\n123");
 })->throws(InvalidArgumentException::class, 'An entity tag cannot contain control characters.');

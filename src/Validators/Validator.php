@@ -50,9 +50,17 @@ final readonly class Validator
      * Reject a normalised tag that cannot appear inside a quoted entity tag.
      *
      * RFC 9110 §8.8.3 defines `etagc` as `%x21 / %x23-7E / obs-text`. This is a
-     * deliberately minimal guard on the two characters that actually break the
-     * header — a double quote and a control character — plus the empty tag. It
-     * is not a full `obs-text` check; strategies are trusted beyond that.
+     * deliberately minimal guard on the three characters that actually break
+     * the header — a double quote, a comma, and a control character — plus the
+     * empty tag. It is not a full `obs-text` check; strategies are trusted
+     * beyond that.
+     *
+     * A comma is legal `etagc` and still has to go. `If-Match` and
+     * `If-None-Match` carry a `#entity-tag` list, so a tag containing one
+     * splits into two malformed members the moment a client echoes it back,
+     * neither of which can ever match — a permanent 412 on that resource. The
+     * package's own strategies emit hex and cannot reach it; a custom
+     * ValidatorStrategy can, and this is where it finds out.
      *
      * @throws InvalidArgumentException
      */
@@ -65,6 +73,12 @@ final readonly class Validator
         if (str_contains($etag, '"')) {
             throw new InvalidArgumentException(
                 "Entity tag [{$etag}] contains a double quote, which RFC 9110 does not permit inside one.",
+            );
+        }
+
+        if (str_contains($etag, ',')) {
+            throw new InvalidArgumentException(
+                "Entity tag [{$etag}] contains a comma, which would split it across two members of an If-Match list.",
             );
         }
 
