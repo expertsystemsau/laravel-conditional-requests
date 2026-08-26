@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ExpertSystems\ConditionalRequests\Preconditions;
 
+use DateTimeImmutable;
 use ExpertSystems\ConditionalRequests\Validators\Validator;
 use Illuminate\Http\Request;
 
@@ -23,6 +24,10 @@ use Illuminate\Http\Request;
  *    can never satisfy it.
  *  - §13.1.2, If-None-Match, uses WEAK comparison. The opaque tags must be
  *    octet-identical; either side may be weak.
+ *  - §13.1.4, If-Unmodified-Since, compares dates at one-second granularity.
+ *    Both sides are whole seconds — Validator floors its own — and equality
+ *    satisfies the condition, because a client echoing back the date we
+ *    published is the normal case rather than an edge one.
  *
  * Nothing here touches the container, the configuration, or a response, so the
  * whole rule set is exercised by unit tests with a hand-built Request.
@@ -77,6 +82,21 @@ final readonly class PreconditionEvaluator
             return $this->outcome($this->isWildcard($ifMatch)
                 ? $current instanceof Validator
                 : $this->matchesStrongly($ifMatch, $current));
+        }
+
+        // §13.2.2 step 2: consulted only when If-Match is absent, and evaluated
+        // BEFORE If-None-Match rather than after it. A field value that is not
+        // a valid HTTP-date is ignored per §13.1.4, which unmodifiedSince()
+        // reports as null — the request then carries no date precondition at
+        // all and falls through to the branches below.
+        $ifUnmodifiedSince = $this->header($request, 'If-Unmodified-Since');
+
+        if ($ifUnmodifiedSince !== null) {
+            $satisfied = $this->unmodifiedSince($ifUnmodifiedSince, $current);
+
+            if ($satisfied !== null) {
+                return $this->outcome($satisfied);
+            }
         }
 
         $ifNoneMatch = $this->header($request, 'If-None-Match');
@@ -169,6 +189,69 @@ final readonly class PreconditionEvaluator
         }
 
         return false;
+    }
+
+    /**
+     * Whether an If-Unmodified-Since field value is satisfied by the current
+     * validator, per RFC 9110 §13.1.4. Null means the value is not a valid
+     * HTTP-date and must be ignored — "no opinion", not "satisfied".
+     *
+     * Two rules do the work here. The comparison accepts equality, because the
+     * normal case is a client echoing back the date this package published;
+     * refusing equality would make the header useless for its own purpose. And
+     * the date on our side is already floored to the whole second by Validator,
+     * because comparing a raw 12:00:00.700 against the 12:00:00 we published
+     * would refuse that client's write forever.
+     *
+     * A resource with no date at all fails closed. The condition cannot be
+     * shown to hold, and a client that sent this header asked to be refused
+     * when the server cannot vouch for the state — proceeding would silently
+     * turn the guard it asked for into a no-op.
+     */
+    public function unmodifiedSince(string $header, ?Validator $current): ?bool
+    {
+        $since = $this->httpDate($header);
+
+        if ($since === null) {
+            return null;
+        }
+
+        $modified = $current?->lastModified;
+
+        if (! $modified instanceof DateTimeImmutable) {
+            return false;
+        }
+
+        return $modified->getTimestamp() <= $since;
+    }
+
+    /**
+     * An HTTP-date as a Unix timestamp, or null when it is not one.
+     *
+     * strtotime() is what Symfony's Response::isNotModified() uses for
+     * If-Modified-Since, so both halves of the family accept exactly the same
+     * field values — including all three formats §5.6.7 requires a recipient to
+     * read. HeaderBag::getDate() would be the tidier call and is unusable: it
+     * throws RuntimeException on a value it cannot parse, and §7 wants a
+     * malformed validator header ignored rather than fatal.
+     *
+     * The blank check is load-bearing rather than defensive. strtotime('   ')
+     * returns the *current time* instead of false, so a whitespace-only field
+     * value reaching the parser would be read as "unmodified since now" and
+     * satisfy every precondition it was asked about. evaluate() already treats
+     * a blank header as absent; this makes the parser safe on its own terms.
+     */
+    private function httpDate(string $value): ?int
+    {
+        $value = trim($value);
+
+        if ($value === '') {
+            return null;
+        }
+
+        $timestamp = strtotime($value);
+
+        return $timestamp === false ? null : $timestamp;
     }
 
     /**

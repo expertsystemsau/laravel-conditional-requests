@@ -6,6 +6,7 @@ use ExpertSystems\ConditionalRequests\Preconditions\PreconditionEvaluator;
 use ExpertSystems\ConditionalRequests\Preconditions\PreconditionOutcome;
 use ExpertSystems\ConditionalRequests\Validators\Validator;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 
 /**
  * An unsafe request carrying the given headers — the only input the evaluator
@@ -225,6 +226,149 @@ it('does not treat a wildcard inside a list as the wildcard', function (): void 
     // ignored per §7, and the surrounding tags still decide the outcome.
     expect((new PreconditionEvaluator)->evaluate(guardedRequest(['If-Match' => '"abc", *']), new Validator('xyz'), false))
         ->toBe(PreconditionOutcome::Failed);
+});
+
+// --- If-Unmodified-Since, RFC 9110 §13.1.4 ---
+
+/**
+ * A validator whose resource was last modified at the given instant.
+ */
+function datedValidator(string $modified): Validator
+{
+    return new Validator('abc', lastModified: Carbon::parse($modified, 'UTC'));
+}
+
+it('passes an If-Unmodified-Since later than the modification date', function (): void {
+    expect((new PreconditionEvaluator)->evaluate(
+        guardedRequest(['If-Unmodified-Since' => 'Wed, 26 Aug 2026 12:00:05 GMT']),
+        datedValidator('2026-08-26 12:00:00'),
+        false,
+    ))->toBe(PreconditionOutcome::Passed);
+});
+
+it('passes an If-Unmodified-Since equal to the modification date', function (): void {
+    // The normal case: the client is echoing back the date we published. If
+    // equality did not pass, the header would be unusable for its own purpose.
+    expect((new PreconditionEvaluator)->evaluate(
+        guardedRequest(['If-Unmodified-Since' => 'Wed, 26 Aug 2026 12:00:00 GMT']),
+        datedValidator('2026-08-26 12:00:00'),
+        false,
+    ))->toBe(PreconditionOutcome::Passed);
+});
+
+it('passes an If-Unmodified-Since equal to a sub second modification date', function (): void {
+    // The validator floors 12:00:00.700 to 12:00:00, which is what was
+    // published. Comparing the raw value would refuse this write forever.
+    expect((new PreconditionEvaluator)->evaluate(
+        guardedRequest(['If-Unmodified-Since' => 'Wed, 26 Aug 2026 12:00:00 GMT']),
+        datedValidator('2026-08-26 12:00:00.700000'),
+        false,
+    ))->toBe(PreconditionOutcome::Passed);
+});
+
+it('fails an If-Unmodified-Since one second before the modification date', function (): void {
+    expect((new PreconditionEvaluator)->evaluate(
+        guardedRequest(['If-Unmodified-Since' => 'Wed, 26 Aug 2026 11:59:59 GMT']),
+        datedValidator('2026-08-26 12:00:00'),
+        false,
+    ))->toBe(PreconditionOutcome::Failed);
+});
+
+it('fails an If-Unmodified-Since when the resource publishes no date', function (): void {
+    // Fail closed. A client sending this header is asking to be refused when
+    // the server cannot vouch for the state; proceeding would turn the guard it
+    // asked for into a no-op, which is werk365 defect #2 in another costume.
+    expect((new PreconditionEvaluator)->evaluate(
+        guardedRequest(['If-Unmodified-Since' => 'Wed, 26 Aug 2026 12:00:00 GMT']),
+        new Validator('abc'),
+        false,
+    ))->toBe(PreconditionOutcome::Failed);
+});
+
+it('fails an If-Unmodified-Since when there is no current validator', function (): void {
+    expect((new PreconditionEvaluator)->evaluate(
+        guardedRequest(['If-Unmodified-Since' => 'Wed, 26 Aug 2026 12:00:00 GMT']),
+        null,
+        false,
+    ))->toBe(PreconditionOutcome::Failed);
+});
+
+it('ignores a malformed If-Unmodified-Since', function (): void {
+    // §13.1.4: a value that is not a valid HTTP-date is ignored, so the request
+    // carries no precondition at all and a required route says so.
+    expect((new PreconditionEvaluator)->evaluate(
+        guardedRequest(['If-Unmodified-Since' => 'not a date']),
+        datedValidator('2026-08-26 12:00:00'),
+        true,
+    ))->toBe(PreconditionOutcome::Required);
+});
+
+it('lets a valid If-Unmodified-Since satisfy a required route', function (): void {
+    // The gap v0.3 shipped with: this was 428 until now.
+    expect((new PreconditionEvaluator)->evaluate(
+        guardedRequest(['If-Unmodified-Since' => 'Wed, 26 Aug 2026 12:00:05 GMT']),
+        datedValidator('2026-08-26 12:00:00'),
+        true,
+    ))->toBe(PreconditionOutcome::Passed);
+});
+
+it('ignores If-Unmodified-Since when If-Match is present', function (): void {
+    // §13.2.2 step 1 wins outright: a satisfied If-Match proceeds even though
+    // the date precondition would have refused.
+    expect((new PreconditionEvaluator)->evaluate(
+        guardedRequest(['If-Match' => '"abc"', 'If-Unmodified-Since' => 'Wed, 26 Aug 2026 11:00:00 GMT']),
+        datedValidator('2026-08-26 12:00:00'),
+        false,
+    ))->toBe(PreconditionOutcome::Passed);
+});
+
+it('ignores If-Unmodified-Since when a stale If-Match is present', function (): void {
+    expect((new PreconditionEvaluator)->evaluate(
+        guardedRequest(['If-Match' => '"stale"', 'If-Unmodified-Since' => 'Wed, 26 Aug 2026 12:00:05 GMT']),
+        datedValidator('2026-08-26 12:00:00'),
+        false,
+    ))->toBe(PreconditionOutcome::Failed);
+});
+
+it('evaluates If-Unmodified-Since before If-None-Match', function (): void {
+    // §13.2.2 orders the steps If-Match, If-Unmodified-Since, If-None-Match.
+    // The If-None-Match here would pass on its own — it names some other
+    // version — so only the ordering makes this a refusal.
+    expect((new PreconditionEvaluator)->evaluate(
+        guardedRequest(['If-Unmodified-Since' => 'Wed, 26 Aug 2026 11:00:00 GMT', 'If-None-Match' => '"other"']),
+        datedValidator('2026-08-26 12:00:00'),
+        false,
+    ))->toBe(PreconditionOutcome::Failed);
+});
+
+it('treats a blank If-Unmodified-Since as absent', function (): void {
+    expect((new PreconditionEvaluator)->evaluate(
+        guardedRequest(['If-Unmodified-Since' => '   ']),
+        datedValidator('2026-08-26 12:00:00'),
+        true,
+    ))->toBe(PreconditionOutcome::Required);
+});
+
+it('reports no opinion on a field value that is not an HTTP date', function (): void {
+    $evaluator = new PreconditionEvaluator;
+    $current = datedValidator('2026-08-26 12:00:00');
+
+    // The whitespace case is not decoration: strtotime('   ') returns the
+    // current time rather than false, so a blank value that reached the parser
+    // would satisfy every precondition it was asked about.
+    expect($evaluator->unmodifiedSince('not a date', $current))->toBeNull()
+        ->and($evaluator->unmodifiedSince('   ', $current))->toBeNull()
+        ->and($evaluator->unmodifiedSince('', $current))->toBeNull();
+});
+
+it('compares an HTTP date in any of the formats a recipient must accept', function (): void {
+    // §5.6.7: IMF-fixdate, the obsolete RFC 850 form, and asctime.
+    $evaluator = new PreconditionEvaluator;
+    $current = datedValidator('2026-08-26 12:00:00');
+
+    expect($evaluator->unmodifiedSince('Wed, 26 Aug 2026 12:00:00 GMT', $current))->toBeTrue()
+        ->and($evaluator->unmodifiedSince('Wednesday, 26-Aug-26 12:00:00 GMT', $current))->toBeTrue()
+        ->and($evaluator->unmodifiedSince('Wed Aug 26 12:00:00 2026 GMT', $current))->toBeTrue();
 });
 
 // --- precedence and the required flag ---
