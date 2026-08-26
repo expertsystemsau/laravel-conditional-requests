@@ -196,3 +196,37 @@ it('lets the client recover by refetching', function (): void {
     $this->put('/articles/1', [], ['If-Match' => (string) $this->get('/articles/1')->headers->get('ETag')])
         ->assertOk();
 });
+
+it('refuses a concrete If-None-Match on a required route and leaves the record alone', function (): void {
+    Route::middleware([SubstituteBindings::class, 'conditional:model'])
+        ->get('/articles/{article}', fn (Article $article): array => ['title' => $article->title]);
+
+    Route::middleware([SubstituteBindings::class, 'conditional:required'])
+        ->patch('/articles/{article}', function (Article $article): array {
+            $article->update(['title' => 'Clobbered']);
+
+            return ['title' => $article->title];
+        });
+
+    $stale = (string) $this->get('/articles/1')->headers->get('ETag');
+
+    Article::query()->findOrFail(1)->update(['version' => 2]);
+
+    // The whole bypass in one file: the tag the update guard correctly refuses
+    // used to apply the write verbatim once the client moved it to the other
+    // header, and so did any value at all.
+    $this->patch('/articles/1', [], ['If-Match' => $stale])->assertStatus(412);
+    $this->patch('/articles/1', [], ['If-None-Match' => $stale])->assertStatus(428);
+    $this->patch('/articles/1', [], ['If-None-Match' => '"0"'])->assertStatus(428);
+    $this->patch('/articles/1', [], ['If-None-Match' => 'garbage'])->assertStatus(428);
+
+    expect(Article::query()->findOrFail(1)->title)->toBe('Hello');
+});
+
+it('still lets an If-None-Match wildcard satisfy a required route', function (): void {
+    // The create wildcard is a precondition — "only if nothing is there" — and
+    // is the one If-None-Match value that keeps satisfying the flag.
+    guardedArticleRoutes($runs);
+
+    $this->put('/articles/1', [], ['If-None-Match' => '*'])->assertStatus(412);
+});

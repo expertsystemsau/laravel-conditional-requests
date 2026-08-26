@@ -264,3 +264,46 @@ it('accepts If-None-Match as a precondition on a required route', function (): v
     expect((new PreconditionEvaluator)->evaluate(guardedRequest(['If-None-Match' => '*']), null, true))
         ->toBe(PreconditionOutcome::Passed);
 });
+
+it('refuses a concrete If-None-Match as the precondition a required route demands', function (): void {
+    // §13.2.2 has a non-matching If-None-Match proceed, and on a route without
+    // `required` it still does. Counting it as the precondition a guarded route
+    // demanded is what defeated the flag: the field value states no version the
+    // client believes it is writing over, so 428 asks for one that does.
+    expect((new PreconditionEvaluator)->evaluate(guardedRequest(['If-None-Match' => '"other"']), new Validator('abc'), true))
+        ->toBe(PreconditionOutcome::Required);
+});
+
+it('refuses the stale tag If-Match rejects when it is moved to If-None-Match', function (): void {
+    // The sharpest form of the bypass: take the tag the update guard correctly
+    // refuses and send it on the other header. It has to stay refused.
+    $evaluator = new PreconditionEvaluator;
+
+    expect($evaluator->evaluate(guardedRequest(['If-Match' => '"stale"']), new Validator('abc'), true))
+        ->toBe(PreconditionOutcome::Failed)
+        ->and($evaluator->evaluate(guardedRequest(['If-None-Match' => '"stale"']), new Validator('abc'), true))
+        ->toBe(PreconditionOutcome::Required);
+});
+
+it('refuses a malformed If-None-Match on a required route rather than passing it', function (): void {
+    // Unquoted, so it is not an entity tag and matches nothing — which under
+    // §13.1.2 means the condition holds and the write proceeds. On a required
+    // route that made every value a client could type into a valid bypass.
+    $evaluator = new PreconditionEvaluator;
+
+    foreach (['garbage', ',', 'W/', '**', '"*"', 'W/"0"'] as $value) {
+        expect($evaluator->evaluate(guardedRequest(['If-None-Match' => $value]), new Validator('abc'), true))
+            ->toBe(PreconditionOutcome::Required);
+    }
+});
+
+it('still evaluates a concrete If-None-Match normally without required', function (): void {
+    // The comparison semantics are untouched: only what counts as having
+    // supplied a precondition changed.
+    $evaluator = new PreconditionEvaluator;
+
+    expect($evaluator->evaluate(guardedRequest(['If-None-Match' => '"other"']), new Validator('abc'), false))
+        ->toBe(PreconditionOutcome::Passed)
+        ->and($evaluator->evaluate(guardedRequest(['If-None-Match' => '"abc"']), new Validator('abc'), false))
+        ->toBe(PreconditionOutcome::Failed);
+});

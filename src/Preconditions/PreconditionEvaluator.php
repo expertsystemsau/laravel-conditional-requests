@@ -37,6 +37,19 @@ final readonly class PreconditionEvaluator
      * absence of any precondition from "proceed" into 428 — without it the
      * guard is opt-out and a client clobbers freely by omitting a header.
      *
+     * What satisfies `required` is narrower than what this method evaluates.
+     * Two field values state a version the client believes it is writing over:
+     * an If-Match, whatever it names, and the If-None-Match wildcard, which
+     * says "only if nothing is there". A *concrete* If-None-Match says neither.
+     * §13.2.2 has a non-matching one proceed, and on a route that never asked
+     * for a guard it still does — but treating it as the precondition a
+     * `required` route demands defeated the flag outright: the stale tag
+     * If-Match correctly refuses passes verbatim once it is moved to the other
+     * header, as does any value at all, `"0"` and `garbage` included. On a
+     * `required` route it is answered 428, asking for the precondition the
+     * route actually wants. The comparison itself is untouched; what changed is
+     * only what counts as having supplied one.
+     *
      * A null $current collapses two states the v0.2 contract cannot tell apart:
      * the resource is absent, and the resource exists but has no validator the
      * strategy could derive. The two wildcards read that one state in opposite
@@ -70,9 +83,13 @@ final readonly class PreconditionEvaluator
         $ifNoneMatch = $this->header($request, 'If-None-Match');
 
         if ($ifNoneMatch !== null) {
-            return $this->outcome($this->isWildcard($ifNoneMatch)
-                ? ! $current instanceof Validator
-                : ! $this->matchesWeakly($ifNoneMatch, $current));
+            if ($this->isWildcard($ifNoneMatch)) {
+                return $this->outcome(! $current instanceof Validator);
+            }
+
+            return $required
+                ? PreconditionOutcome::Required
+                : $this->outcome(! $this->matchesWeakly($ifNoneMatch, $current));
         }
 
         return $required ? PreconditionOutcome::Required : PreconditionOutcome::Passed;

@@ -94,8 +94,23 @@ it('evaluates If-Match first when both wildcards are sent', function (): void {
     $this->put('/articles/1', [], ['If-Match' => '*', 'If-None-Match' => '*'])->assertOk();
 });
 
-it('refuses a non wildcard If-None-Match naming the current version', function (): void {
+it('demands a real precondition for a non wildcard If-None-Match on a required route', function (): void {
+    // Amended with the v0.3 write-path sweep. This previously asserted 412,
+    // which is §13.2.2's answer for a concrete If-None-Match that matches — but
+    // the route is `required`, and a concrete If-None-Match is not one of the
+    // two field values that satisfy the flag. Whatever it names, the answer is
+    // now 428; the comparison below still decides a route without `required`.
     $etag = (string) $this->get('/articles/1')->headers->get('ETag');
 
-    $this->put('/articles/1', [], ['If-None-Match' => $etag])->assertStatus(412);
+    $this->put('/articles/1', [], ['If-None-Match' => $etag])->assertStatus(428);
+});
+
+it('refuses a non wildcard If-None-Match naming the current version', function (): void {
+    Route::middleware([SubstituteBindings::class, 'conditional:model'])
+        ->patch('/articles/{article}', fn (): array => ['status' => 'updated']);
+
+    $etag = (string) $this->get('/articles/1')->headers->get('ETag');
+
+    $this->patch('/articles/1', [], ['If-None-Match' => $etag])->assertStatus(412);
+    $this->patch('/articles/1', [], ['If-None-Match' => '"other"'])->assertOk();
 });

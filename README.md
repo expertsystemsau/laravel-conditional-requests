@@ -350,6 +350,9 @@ If-None-Match: *
 
 `If-None-Match` on a write is not only the wildcard. A concrete entity tag works too, compared **weakly** per RFC 9110 §13.1.2: if it matches the resource's current validator the write is refused with `412`, and otherwise it proceeds — the same rule the read path already applies, just guarding a write instead of serving a `304`.
 
+> [!IMPORTANT]
+> A concrete `If-None-Match` does **not** satisfy `required`. Only two field values state a version the client believes it is writing over: an `If-Match`, whatever it names, and `If-None-Match: *`, which says "only if nothing is there". A concrete `If-None-Match` says neither, so on a `conditional:required` route it is answered `428` whatever it names — including a tag that matches, which would be `412` on a route without the flag. Anything less would defeat the flag outright: the very tag `If-Match` refuses with `412` proceeded once the client moved it to the other header, and so did `"0"`, `garbage`, and `W/`. Use `If-Match` to guard an update and `If-None-Match: *` to guard a create; the weak comparison above still applies on routes without `required`.
+
 For the guard to be able to answer, the route has to address the resource being created and its binding has to be able to report "absent" rather than aborting. Implicit binding raises a `404` for a missing record before the middleware ever runs, so register an explicit binder that returns `null`:
 
 ```php
@@ -412,7 +415,8 @@ Their default bodies live in `lang/en/messages.php`; publish it with the `larave
 | --- | --- | --- | --- | --- |
 | `If-None-Match` | reads | `304 Not Modified` | `200 OK` with body | yes |
 | `If-None-Match: *` | writes | `412 Precondition Failed` | write proceeds | yes |
-| `If-None-Match` (concrete tag, weak comparison) | writes | `412 Precondition Failed` | write proceeds | yes |
+| `If-None-Match` (concrete tag, weak comparison) | writes, without `required` | `412 Precondition Failed` | write proceeds | yes |
+| `If-None-Match` (concrete tag) | writes, when required | `428 Precondition Required` | `428 Precondition Required` | yes |
 | `If-Modified-Since` | reads | `304 Not Modified` | `200 OK` with body | no |
 | `If-Match` | writes | write proceeds | `412 Precondition Failed` | yes |
 | `If-Unmodified-Since` | writes | write proceeds | `412 Precondition Failed` | no |
