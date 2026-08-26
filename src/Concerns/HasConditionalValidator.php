@@ -128,6 +128,19 @@ trait HasConditionalValidator
      * Override to point at a different column, or to return null on a model
      * that should publish no Last-Modified. Returning null does not affect the
      * entity tag, which keeps validating the record either way.
+     *
+     * A column named here MUST be cast to a date on the model:
+     *
+     *     protected $casts = ['published_at' => 'datetime'];
+     *
+     * conditionalLastModified() reads the column through getAttribute(), which
+     * returns a DateTimeInterface only for a cast column — Model::getDates()
+     * names created_at and updated_at and nothing else. An uncast column comes
+     * back as the raw string the database holds, fails the instanceof check,
+     * and the model silently publishes no date at all. Parsing a string here
+     * instead would widen the InvalidArgumentException surface the derivation
+     * already has to catch, so the cast is the requirement rather than the
+     * fallback.
      */
     protected function conditionalLastModifiedColumn(): ?string
     {

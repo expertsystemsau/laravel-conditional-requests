@@ -248,6 +248,24 @@ If-Modified-Since: Wed, 26 Aug 2026 12:00:00 GMT
 
 The date comes from `updated_at`. A model with no timestamps, a null `UPDATED_AT` column, or an unloaded `updated_at` publishes no date and keeps its tag; override `conditionalLastModifiedColumn()` to point at a different column, or to return `null` to suppress the date for a model entirely. The body-hash strategy never publishes one — it fingerprints content, and has no idea when that content changed.
 
+```php
+class Article extends Model implements ProvidesConditionalValidator
+{
+    use HasConditionalValidator;
+
+    // Required: an uncast column publishes no date. See the note below.
+    protected $casts = ['published_at' => 'datetime'];
+
+    protected function conditionalLastModifiedColumn(): ?string
+    {
+        return 'published_at';
+    }
+}
+```
+
+> [!IMPORTANT]
+> **A column you name in `conditionalLastModifiedColumn()` must be cast to a date on the model.** The value is read with `getAttribute()`, which returns a `DateTimeInterface` only for a cast column — Eloquent casts `created_at` and `updated_at` and nothing else on your behalf. Without `protected $casts = ['published_at' => 'datetime'];` the column comes back as the raw string the database holds, and the model publishes no `Last-Modified` at all. Nothing fails: the `ETag` is unaffected and keeps validating the record, so the only symptom is a date that never appears.
+
 > [!IMPORTANT]
 > **A record that has just changed publishes no `Last-Modified` until the second it changed in has elapsed.** This is deliberate, and it is the one thing most `Last-Modified` implementations get wrong.
 >

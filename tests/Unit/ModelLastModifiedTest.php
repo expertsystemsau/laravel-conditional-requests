@@ -171,3 +171,53 @@ it('honours a conditionalLastModifiedColumn override', function (): void {
     expect($validator?->etag)->not->toBeNull()
         ->and($validator?->lastModified)->toBeNull();
 });
+
+it('publishes a date from an overridden column that the model casts', function (): void {
+    // The half the README documents. getAttribute() returns a DateTimeInterface
+    // only for a column the model casts as a date, so the cast is what makes an
+    // overridden column work at all — see the other half below.
+    test()->travelTo(Carbon::parse('2026-08-26 12:00:05', 'UTC'));
+
+    $model = new class extends Article
+    {
+        protected $table = 'articles';
+
+        protected $casts = ['published_at' => 'datetime'];
+
+        protected function conditionalLastModifiedColumn(): ?string
+        {
+            return 'published_at';
+        }
+    };
+
+    $validator = $model->forceFill(['id' => 1, 'version' => 3, 'published_at' => '2026-08-26 12:00:00'])
+        ->conditionalValidator(Request::create('/articles/1'));
+
+    expect($validator?->lastModified?->format('Y-m-d H:i:s'))->toBe('2026-08-26 12:00:00');
+});
+
+it('publishes no date from an overridden column the model does not cast', function (): void {
+    // The trap. Model::getDates() names only created_at and updated_at, so an
+    // uncast published_at comes back from getAttribute() as the raw string the
+    // column holds, fails the DateTimeInterface check, and the date is silently
+    // never published — the tag alone keeps validating the record. The
+    // derivation is deliberately not made tolerant of a string: parsing one
+    // here would widen the InvalidArgumentException surface for no gain.
+    test()->travelTo(Carbon::parse('2026-08-26 12:00:05', 'UTC'));
+
+    $model = new class extends Article
+    {
+        protected $table = 'articles';
+
+        protected function conditionalLastModifiedColumn(): ?string
+        {
+            return 'published_at';
+        }
+    };
+
+    $validator = $model->forceFill(['id' => 1, 'version' => 3, 'published_at' => '2026-08-26 12:00:00'])
+        ->conditionalValidator(Request::create('/articles/1'));
+
+    expect($validator?->etag)->not->toBeNull()
+        ->and($validator?->lastModified)->toBeNull();
+});
