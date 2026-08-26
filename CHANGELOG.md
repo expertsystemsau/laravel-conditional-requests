@@ -70,6 +70,45 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - SQLite has no row locks — `lockForUpdate()` compiles to nothing there — so `lock` on SQLite gets the re-read and the re-evaluation without the exclusion. SQL Server locks and re-evaluates correctly but is not sent a lock timeout, so its own default of wait-forever stands whatever `lock_timeout` says.
 - A pre-controller `304` answers before anything declared after `conditional`, including per-record authorization. That, and seventeen other things worth knowing before deploying, are in [`docs/hazards.md`](docs/hazards.md).
 
+### Verified for this release
+
+Measured on a clean Laravel 13.29 application that installed the package the way
+a stranger would, on PHP 8.5, against MySQL 8.4.11 and PostgreSQL 16.15.
+
+- **Row locks against real databases.** `composer test:lock` — 5 passed, 0
+  skipped, on MySQL and again on PostgreSQL. The suite fails rather than skips
+  when the driver is absent, so a pass is proof it executed.
+- **Concurrency, with the lock.** 240 concurrent `PATCH` requests against a
+  `conditional:required,lock` route through nginx + php-fpm on MySQL. Every
+  `2xx` was a real serialised increment — the row's final version rose by
+  exactly the number of `2xx` responses, every other request was a `412`, and
+  there were no lock timeouts and no unexpected statuses.
+- **Concurrency, without it.** The same route, the same load, with a deliberate
+  250 ms window opened between the guard's read and the controller's write:
+  without `lock`, 23 requests were answered `2xx` while the version advanced by
+  only 6 — 17 committed writes lost, every one of them past an `If-Match` the
+  guard had accepted. With `lock` and the identical window, 6 `2xx`, 24 `412`,
+  and the version advanced by exactly 6. That gap is what `lock` is for, and it
+  is why `If-Match` alone is documented as check-then-write.
+- **The lock timeout does not leak.** Under Octane (FrankenPHP, one worker, one
+  persistent MySQL connection held across every request),
+  `@@session.innodb_lock_wait_timeout` read 50 before a guarded write, 5 inside
+  the guarded transaction, and 50 again afterwards — and 50 again after a write
+  refused with `412`. The session is left as it was found.
+- **The read path under three SAPIs.** A 49-case matrix — cold `ETag`, `304`
+  with a zero-length body and the tag echoed, controller-execution counts,
+  `HEAD` parity, the `*` and `W/*` refusals behind a gate declared after
+  `conditional`, `428`, `412` on stale, blank, zero-member and weak `If-Match`,
+  tag replay, `If-Match: *`, the create guard, and `lock` — passed identically
+  under `artisan serve` on SQLite, nginx + php-fpm on MySQL, and Octane on
+  MySQL.
+- **`Content-Type` on a `304` under php-fpm.** Confirmed absent. The
+  middleware prepares the response itself so PHP's `default_mimetype` is
+  suppressed; this had previously only been checked on the CLI SAPI.
+- **No state bleeding under Octane.** 80 interleaved requests for two records on
+  a single worker: each record kept its own tag, one record's tag never produced
+  a `304` for the other, and no tag drifted.
+
 ### Development history
 
 `v1.0.0` is the first tagged release. The package was built in five phases —
