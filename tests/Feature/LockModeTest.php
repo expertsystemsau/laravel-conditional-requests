@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
+use ExpertSystems\ConditionalRequests\ConditionalRequests;
 use ExpertSystems\ConditionalRequests\Contracts\LockableValidatorStrategy;
 use ExpertSystems\ConditionalRequests\Contracts\ValidatorStrategy;
 use ExpertSystems\ConditionalRequests\Exceptions\LockTimeoutException;
-use ExpertSystems\ConditionalRequests\Facades\ConditionalRequests;
 use ExpertSystems\ConditionalRequests\Tests\Fixtures\Article;
 use ExpertSystems\ConditionalRequests\Tests\Fixtures\ObservesTransactionLevel;
 use ExpertSystems\ConditionalRequests\Tests\Fixtures\SecondaryArticle;
@@ -232,7 +232,7 @@ it('has nothing to lock on a create and says so by doing nothing', function (): 
 });
 
 it('refuses a lock flag on a strategy that cannot name a row', function (): void {
-    ConditionalRequests::extend('tagonly', fn (): ValidatorStrategy => fixedRequestTagStrategy('x'));
+    app(ConditionalRequests::class)->extend('tagonly', fn (): ValidatorStrategy => fixedRequestTagStrategy('x'));
 
     Route::middleware([SubstituteBindings::class, 'conditional:tagonly,lock'])
         ->put('/articles/{article}', fn (): array => ['ok' => true]);
@@ -269,7 +269,7 @@ it('ignores the lock flag on a safe method', function (): void {
 });
 
 it('answers a lock it could not take with 503 rather than 500', function (): void {
-    ConditionalRequests::extend('contended', fn (): ValidatorStrategy => new class implements LockableValidatorStrategy
+    app(ConditionalRequests::class)->extend('contended', fn (): ValidatorStrategy => new class implements LockableValidatorStrategy
     {
         public function fromRequest(Request $request): ?Validator
         {
@@ -312,7 +312,7 @@ it('answers a lock it could not take with 503 rather than 500', function (): voi
 });
 
 it('does not disguise an ordinary query failure as contention', function (): void {
-    ConditionalRequests::extend('broken', fn (): ValidatorStrategy => new class implements LockableValidatorStrategy
+    app(ConditionalRequests::class)->extend('broken', fn (): ValidatorStrategy => new class implements LockableValidatorStrategy
     {
         public function fromRequest(Request $request): ?Validator
         {

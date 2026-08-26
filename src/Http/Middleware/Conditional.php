@@ -34,6 +34,11 @@ use Throwable;
  */
 final readonly class Conditional
 {
+    /**
+     * @internal The constructor is resolved from the container and is not part
+     *           of the frozen surface — it gained parameters in three
+     *           consecutive releases and may gain more. See docs/api.md.
+     */
     public function __construct(
         private ConditionalRequests $registry,
         private Repository $config,

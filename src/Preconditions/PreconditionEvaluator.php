@@ -32,6 +32,10 @@ use Illuminate\Http\Request;
  *
  * Nothing here touches the container, the configuration, or a response, so the
  * whole rule set is exercised by unit tests with a hand-built Request.
+ *
+ * @internal The public surface is the HTTP behaviour this produces: 412, 428,
+ *           and the RFC 9110 §13.2.2 precedence, all documented in
+ *           docs/writes.md.
  */
 final readonly class PreconditionEvaluator
 {

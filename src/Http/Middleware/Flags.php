@@ -13,6 +13,9 @@ namespace ExpertSystems\ConditionalRequests\Http\Middleware;
  * strategy registry, which would go looking for a strategy of that name and
  * throw. Adding a reserved word later means extending the chain in parse() and
  * adding a flag to this object.
+ *
+ * @internal Parsed middleware parameters. Internal to the middleware; the
+ *           public surface is the `conditional` alias and its flags.
  */
 final readonly class Flags
 {

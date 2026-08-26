@@ -76,13 +76,16 @@ final readonly class ModelStrategy implements LockableValidatorStrategy
      * Public because it is the single source of truth for the SQL: sqlite's
      * grammar compiles a lock to the empty string, so the only honest way to
      * assert that a FOR UPDATE is actually asked for is to compile this exact
-     * query against a grammar that emits one. Also a real extension point —
-     * override to take a shared lock, add a scope, or eager-load.
+     * query against a grammar that emits one.
      *
      * newQuery() rather than newQueryWithoutScopes(): the locked read should
      * see the record the way the rest of the application sees it, so a record
      * soft-deleted since it was bound re-reads as null and the precondition
      * fails closed.
+     *
+     * @internal Decorate the strategy instead of overriding this — the class is
+     *           final, so there is nothing to override. See
+     *           docs/writes.md#wanting-a-different-lock.
      *
      * @return Builder<Model>
      */

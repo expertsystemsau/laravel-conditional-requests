@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
+use ExpertSystems\ConditionalRequests\ConditionalRequests;
 use ExpertSystems\ConditionalRequests\Contracts\ValidatorStrategy;
-use ExpertSystems\ConditionalRequests\Facades\ConditionalRequests;
 use Illuminate\Support\Facades\Route;
 
 beforeEach(function (): void {
-    ConditionalRequests::extend('flag-probe', fn (): ValidatorStrategy => fixedTagStrategy('from-flag'));
-    ConditionalRequests::extend('config-probe', fn (): ValidatorStrategy => fixedTagStrategy('from-config'));
+    app(ConditionalRequests::class)->extend('flag-probe', fn (): ValidatorStrategy => fixedTagStrategy('from-flag'));
+    app(ConditionalRequests::class)->extend('config-probe', fn (): ValidatorStrategy => fixedTagStrategy('from-config'));
 });
 
 it('uses the strategy named as a middleware flag', function (): void {

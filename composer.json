@@ -118,10 +118,7 @@
         "laravel": {
             "providers": [
                 "ExpertSystems\\ConditionalRequests\\ConditionalRequestsServiceProvider"
-            ],
-            "aliases": {
-                "ConditionalRequests": "ExpertSystems\\ConditionalRequests\\Facades\\ConditionalRequests"
-            }
+            ]
         }
     },
     "config": {

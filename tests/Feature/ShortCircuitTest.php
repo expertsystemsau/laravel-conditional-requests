@@ -2,8 +2,8 @@
 
 declare(strict_types=1);
 
+use ExpertSystems\ConditionalRequests\ConditionalRequests;
 use ExpertSystems\ConditionalRequests\Contracts\ValidatorStrategy;
-use ExpertSystems\ConditionalRequests\Facades\ConditionalRequests;
 use ExpertSystems\ConditionalRequests\Http\Middleware\Conditional;
 use ExpertSystems\ConditionalRequests\Tests\Fixtures\Article;
 use Illuminate\Contracts\Http\Kernel;
@@ -154,8 +154,8 @@ it('does not short-circuit on a weak-form wildcard beside a tag that is not the 
 });
 
 it('produces a 304 indistinguishable from one produced after the controller ran', function (): void {
-    ConditionalRequests::extend('probe-response', fn (): ValidatorStrategy => fixedTagStrategy('probe-tag'));
-    ConditionalRequests::extend('probe-request', fn (): ValidatorStrategy => fixedRequestTagStrategy('probe-tag'));
+    app(ConditionalRequests::class)->extend('probe-response', fn (): ValidatorStrategy => fixedTagStrategy('probe-tag'));
+    app(ConditionalRequests::class)->extend('probe-request', fn (): ValidatorStrategy => fixedRequestTagStrategy('probe-tag'));
 
     Route::middleware('conditional:probe-response')->get('/long', fn (): array => ['title' => 'Hello']);
     Route::middleware('conditional:probe-request')->get('/short', fn (): array => ['title' => 'Hello']);

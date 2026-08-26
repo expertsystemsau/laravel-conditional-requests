@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
+use ExpertSystems\ConditionalRequests\ConditionalRequests;
 use ExpertSystems\ConditionalRequests\Contracts\ValidatorStrategy;
-use ExpertSystems\ConditionalRequests\Facades\ConditionalRequests;
 use Illuminate\Support\Facades\Route;
 
 beforeEach(function (): void {
     // Overriding the registered `model` entry is what makes the implication
     // observable: whatever tag comes back names the strategy that was chosen.
-    ConditionalRequests::extend('model', fn (): ValidatorStrategy => fixedTagStrategy('from-model'));
-    ConditionalRequests::extend('flag-probe', fn (): ValidatorStrategy => fixedTagStrategy('from-flag'));
+    app(ConditionalRequests::class)->extend('model', fn (): ValidatorStrategy => fixedTagStrategy('from-model'));
+    app(ConditionalRequests::class)->extend('flag-probe', fn (): ValidatorStrategy => fixedTagStrategy('from-flag'));
 });
 
 it('accepts a reserved flag instead of treating it as a strategy name', function (): void {

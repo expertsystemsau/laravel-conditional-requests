@@ -2,8 +2,8 @@
 
 declare(strict_types=1);
 
+use ExpertSystems\ConditionalRequests\ConditionalRequests;
 use ExpertSystems\ConditionalRequests\Contracts\RequestValidatorStrategy;
-use ExpertSystems\ConditionalRequests\Facades\ConditionalRequests;
 use ExpertSystems\ConditionalRequests\Http\Middleware\Conditional;
 use Illuminate\Contracts\Http\Kernel;
 use Illuminate\Support\Facades\Route;
@@ -54,7 +54,7 @@ it('clears the default mimetype on a 304 decided before the controller ran', fun
     // A request-derived strategy that does not need a resolved route is the
     // only way to reach the short-circuit from outside the router, which is
     // where the leak lives — `model` finds no record out here and declines.
-    ConditionalRequests::extend('fixed', fn (): RequestValidatorStrategy => fixedRequestTagStrategy('fixed-tag'));
+    app(ConditionalRequests::class)->extend('fixed', fn (): RequestValidatorStrategy => fixedRequestTagStrategy('fixed-tag'));
     config()->set('laravel-conditional-requests.strategy', 'fixed');
 
     app(Kernel::class)->pushMiddleware(Conditional::class);

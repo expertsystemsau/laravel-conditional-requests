@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
+use ExpertSystems\ConditionalRequests\ConditionalRequests;
 use ExpertSystems\ConditionalRequests\Contracts\ProvidesConditionalValidator;
 use ExpertSystems\ConditionalRequests\Contracts\RequestValidatorStrategy;
 use ExpertSystems\ConditionalRequests\Contracts\ValidatorStrategy;
-use ExpertSystems\ConditionalRequests\Facades\ConditionalRequests;
 use ExpertSystems\ConditionalRequests\Tests\Fixtures\Article;
 use ExpertSystems\ConditionalRequests\Tests\Fixtures\Note;
 use Illuminate\Routing\Middleware\SubstituteBindings;
@@ -123,7 +123,7 @@ it('leaves a weak validators create guard alone', function (): void {
 });
 
 it('guards a route whose custom strategy can answer before the controller', function (): void {
-    ConditionalRequests::extend('probe-request', fn (): ValidatorStrategy => fixedRequestTagStrategy('custom-tag'));
+    app(ConditionalRequests::class)->extend('probe-request', fn (): ValidatorStrategy => fixedRequestTagStrategy('custom-tag'));
 
     writeRoute('conditional:probe-request,required');
 

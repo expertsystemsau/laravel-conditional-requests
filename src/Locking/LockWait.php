@@ -19,6 +19,9 @@ use Throwable;
  * error the server raises when that bound is reached — or when the server's own
  * bound is reached, because the bound is opt-in and most deployments will never
  * set one.
+ *
+ * @internal The public surface is the `lock_timeout` config key, the 503, and
+ *           LockTimeoutException.
  */
 final readonly class LockWait
 {

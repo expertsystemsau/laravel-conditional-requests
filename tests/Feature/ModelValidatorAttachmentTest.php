@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
+use ExpertSystems\ConditionalRequests\ConditionalRequests;
 use ExpertSystems\ConditionalRequests\Contracts\RequestValidatorStrategy;
 use ExpertSystems\ConditionalRequests\Contracts\ValidatorStrategy;
-use ExpertSystems\ConditionalRequests\Facades\ConditionalRequests;
 use ExpertSystems\ConditionalRequests\Tests\Fixtures\Article;
 use ExpertSystems\ConditionalRequests\Validators\Validator;
 use Illuminate\Http\Request;
@@ -63,7 +63,7 @@ it('does not recompute a validator it already has', function (): void {
         }
     };
 
-    ConditionalRequests::extend('counting', fn (): ValidatorStrategy => $strategy);
+    app(ConditionalRequests::class)->extend('counting', fn (): ValidatorStrategy => $strategy);
 
     Route::middleware('conditional:counting')->get('/articles', fn (): array => ['title' => 'Hello']);
 
@@ -94,7 +94,7 @@ it('still attaches the validator when bindings are substituted after the middlew
 });
 
 it('attaches a request-derived validator to a streamed response', function (): void {
-    ConditionalRequests::extend('probe-request', fn (): ValidatorStrategy => fixedRequestTagStrategy('streamed-tag'));
+    app(ConditionalRequests::class)->extend('probe-request', fn (): ValidatorStrategy => fixedRequestTagStrategy('streamed-tag'));
 
     Route::middleware('conditional:probe-request')->get('/stream', fn (): StreamedResponse => new StreamedResponse(function (): void {
         echo 'chunk';
@@ -106,7 +106,7 @@ it('attaches a request-derived validator to a streamed response', function (): v
 it('attaches a request-derived validator to a response over the size ceiling', function (): void {
     config()->set('laravel-conditional-requests.max_response_bytes', 8);
 
-    ConditionalRequests::extend('probe-request', fn (): ValidatorStrategy => fixedRequestTagStrategy('large-tag'));
+    app(ConditionalRequests::class)->extend('probe-request', fn (): ValidatorStrategy => fixedRequestTagStrategy('large-tag'));
 
     Route::middleware('conditional:probe-request')->get('/large', fn () => response(str_repeat('a', 64)));
 
@@ -116,7 +116,7 @@ it('attaches a request-derived validator to a response over the size ceiling', f
 it('does not suppress the size ceiling for a strategy that could not answer early', function (): void {
     config()->set('laravel-conditional-requests.max_response_bytes', 8);
 
-    ConditionalRequests::extend('declining', fn (): ValidatorStrategy => decliningStrategy());
+    app(ConditionalRequests::class)->extend('declining', fn (): ValidatorStrategy => decliningStrategy());
 
     Route::middleware('conditional:declining')->get('/large', fn () => response(str_repeat('a', 64)));
 
@@ -128,7 +128,7 @@ it('does not suppress the size ceiling for a strategy that could not answer earl
 });
 
 it('does not suppress the streamed-response rule for a strategy that could not answer early', function (): void {
-    ConditionalRequests::extend('declining', fn (): ValidatorStrategy => decliningStrategy());
+    app(ConditionalRequests::class)->extend('declining', fn (): ValidatorStrategy => decliningStrategy());
 
     Route::middleware('conditional:declining')->get('/stream', fn (): StreamedResponse => new StreamedResponse(function (): void {
         echo 'chunk';
@@ -138,7 +138,7 @@ it('does not suppress the streamed-response rule for a strategy that could not a
 });
 
 it('still skips a response that already carries an ETag', function (): void {
-    ConditionalRequests::extend('probe-request', fn (): ValidatorStrategy => fixedRequestTagStrategy('ours'));
+    app(ConditionalRequests::class)->extend('probe-request', fn (): ValidatorStrategy => fixedRequestTagStrategy('ours'));
 
     Route::middleware('conditional:probe-request')->get('/articles', fn () => response('body')->setEtag('application-owned'));
 
@@ -146,7 +146,7 @@ it('still skips a response that already carries an ETag', function (): void {
 });
 
 it('still gives an error response no validator', function (): void {
-    ConditionalRequests::extend('probe-request', fn (): ValidatorStrategy => fixedRequestTagStrategy('ours'));
+    app(ConditionalRequests::class)->extend('probe-request', fn (): ValidatorStrategy => fixedRequestTagStrategy('ours'));
 
     Route::middleware('conditional:probe-request')->get('/missing', fn () => response('gone', 404));
 
@@ -154,7 +154,7 @@ it('still gives an error response no validator', function (): void {
 });
 
 it('hands the controller a real HEAD request under a request-derived strategy', function (): void {
-    ConditionalRequests::extend('probe-request', fn (): ValidatorStrategy => fixedRequestTagStrategy('head-tag'));
+    app(ConditionalRequests::class)->extend('probe-request', fn (): ValidatorStrategy => fixedRequestTagStrategy('head-tag'));
 
     $seen = null;
 
@@ -174,7 +174,7 @@ it('hands the controller a real HEAD request under a request-derived strategy', 
 });
 
 it('gives a declining strategy the same tag on HEAD as on GET', function (): void {
-    ConditionalRequests::extend('declining', fn (): ValidatorStrategy => decliningStrategy());
+    app(ConditionalRequests::class)->extend('declining', fn (): ValidatorStrategy => decliningStrategy());
 
     Route::middleware('conditional:declining')->get('/articles', fn () => response('body'));
 

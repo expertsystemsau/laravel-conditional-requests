@@ -12,6 +12,9 @@ namespace ExpertSystems\ConditionalRequests\Preconditions;
  * different answers — 428 tells a client to send one, 412 tells it the one it
  * sent is stale. Collapsing them is defect #2 in werk365/etagconditionals,
  * where an absent If-Match simply returns early and the guard becomes opt-out.
+ *
+ * @internal The public surface is the HTTP behaviour it names — 412 and 428 —
+ *           documented in docs/writes.md.
  */
 enum PreconditionOutcome
 {

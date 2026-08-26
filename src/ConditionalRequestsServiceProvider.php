@@ -11,7 +11,16 @@ use Illuminate\Contracts\Config\Repository;
 use Illuminate\Routing\Router;
 use Illuminate\Support\ServiceProvider;
 
-class ConditionalRequestsServiceProvider extends ServiceProvider
+/**
+ * Wires the package into the application.
+ *
+ * @internal Nothing on this class is callable API: it is resolved and invoked
+ *           by the framework. The class *name* is stable, because
+ *           `extra.laravel.providers` names it for auto-discovery and an
+ *           application may register it by hand — but what it does inside, and
+ *           the shape of these two methods, may change in any release.
+ */
+final class ConditionalRequestsServiceProvider extends ServiceProvider
 {
     /**
      * Register any application services.
