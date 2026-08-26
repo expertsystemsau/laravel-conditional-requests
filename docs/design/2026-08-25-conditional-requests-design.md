@@ -58,7 +58,7 @@ Therefore:
 
 - The model strategy exposes a hook for folding representation-affecting inputs into the validator.
 - Config offers `weak => true` for read-only routes where the weaker guarantee is acceptable.
-- Attaching `required` to a route whose strategy yields weak validators is a **configuration error, detected and thrown at boot**, not a silent `412` at runtime.
+- Attaching `required` to a route whose strategy yields weak validators is a **configuration error**, raised as a `LogicException` naming the `weak` config key on the first guarded request that route serves, not a silent `412`. It is not raised at boot: a boot-time route scan cannot see controller-declared middleware, and the weakness that actually breaks the guard belongs to the validator that comes back rather than to the config key, so the first guarded request is the earliest point at which the check is reliable.
 
 ## 5. Architecture
 
@@ -72,7 +72,7 @@ Therefore:
 | `Contracts/RequestValidatorStrategy` | Contract, extends the above. Resolves a `Validator` from the request alone, which is what makes the pre-controller short-circuit possible. Shipped in v0.2; `ModelStrategy` is the only built-in implementation. |
 | `Validators/BodyHashStrategy` | Post-controller. `xxh128` over rendered content. Strong. |
 | `Validators/ModelStrategy` | Pre-controller. From a route-bound model. Strong. |
-| `Preconditions/PreconditionEvaluator` | Our own `If-Match` / `If-Unmodified-Since` evaluation, strong comparison. |
+| `Preconditions/PreconditionEvaluator` | Our own `If-Match` / `If-None-Match` evaluation for unsafe methods, strong comparison for `If-Match`. |
 | `Contracts/ProvidesConditionalValidator` | Model-side contract. |
 | `Concerns/HasConditionalValidator` | Default trait implementation from the connection's database name and table prefix, the table, the key, and either a `version` column or `updated_at`. |
 | `Exceptions/PreconditionFailedException` | `HttpException` subclass, 412. |
@@ -130,9 +130,10 @@ if ifMatch present:
     if ifMatch is '*'  → resource exists ? proceed : throw 412
     if no STRONG match against current       → throw 412
 
-# Create guard — If-None-Match: *   (RFC 9110 §13.1.2, MDN "first upload")
-elseif ifNoneMatch is '*':
-    resource exists                          → throw 412
+# Create guard — If-None-Match   (RFC 9110 §13.1.2, MDN "first upload")
+elseif ifNoneMatch present:
+    if ifNoneMatch is '*' → resource exists ? throw 412 : proceed
+    if any WEAK match against current        → throw 412
     else                                     → proceed
 
 # Fallback validator
@@ -152,6 +153,11 @@ if lock:
 else:
     return $next(request)
 ```
+
+The non-wildcard branch is a correction made in `v0.3`. §13.1.2 applies to unsafe
+methods as well as safe ones, and without it a client that sends
+`If-None-Match: "abc"` to a `required` route is told with `428` that it must send
+a precondition it just sent.
 
 The re-evaluation inside the lock is the point of `lock` mode. Acquiring a lock without re-checking preserves the race.
 
@@ -234,7 +240,7 @@ Scope is unchanged; only the sequence moved.
 | --- | --- |
 | `v0.1` | Read path, body hash, `If-None-Match` → 304 — **shipped** |
 | `v0.2` | Model-derived validators, `fromRequest()`, pre-controller short-circuit — **shipped** |
-| `v0.3` | Write path, `If-Match` → 412, `required` → 428, `If-None-Match: *` create guard |
+| `v0.3` | Write path, `If-Match` → 412, `required` → 428, `If-None-Match: *` create guard — **shipped** |
 | `v0.4` | `Last-Modified` / `If-Modified-Since` / `If-Unmodified-Since` |
 | `v0.5` | `lock` mode with in-transaction re-evaluation |
 | `v1.0` | Documentation, `werk365/etagconditionals` migration guide, API freeze |

@@ -13,6 +13,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - `RequestValidatorStrategy` contract, for strategies that can answer before the controller runs.
 - Pre-controller `304` short-circuit: a matching `If-None-Match` on a model-derived route never executes the route action.
 - Order-independent middleware flags, with `required` and `lock` reserved and implying the `model` strategy.
+- Write path: `If-Match` evaluated with strong comparison before the controller runs, refusing a stale write with `412 Precondition Failed`.
+- `If-None-Match: *` create guard, so two clients racing to create the same resource produce one success and one `412`.
+- `required` flag, answering an unsafe request that carries no precondition with `428 Precondition Required`.
+- `PreconditionEvaluator`, implementing the RFC 9110 §13 comparisons HttpFoundation does not have.
+- `PreconditionFailedException` and `PreconditionRequiredException`, rendered through the application's own exception handler.
+- A `LogicException` naming the offending configuration when `required` is paired with weak validators or with a strategy that cannot answer before the controller runs.
+- Real `412` / `428` copy in `lang/en/messages.php`, publishable with the `laravel-conditional-requests-lang` tag.
 
 ### Changed
 
@@ -21,6 +28,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - A `HEAD` request is no longer presented to the controller as a `GET` when the strategy does not need the rendered body.
 - Every model-derived `ETag` value changes: the connection's database name and table prefix are now part of the fingerprint, so the same key and version cannot collide across the tenants of a database-per-tenant or prefix-per-tenant deployment. No released version emitted a model-derived tag, so no released baseline is invalidated, but a dev checkout tracking `main` will see every one of its tags change at once and miss on the first request after upgrading.
 - A misconfigured `hash` value now fails on every eligible request rather than only on those that reached the tagging step. The strategy is constructed before `$next()` so the short-circuit can consult it, and `BodyHashStrategy` validates the algorithm in its constructor — so a request that ends in a `404`, a stream, or an oversized body now surfaces the same misconfiguration those requests used to pass over. Failing fast is the better behaviour, but it is a behaviour change.
+- Unsafe methods take the write path instead of falling through untouched. The `methods` config key governs read-path eligibility only; the write path applies to every unsafe method.
+- An unsafe method listed in `methods` no longer receives a validator. The write branch sits ahead of read-path eligibility, so an operator who added `POST` to that key under `v0.1` or `v0.2` to get an `ETag` on a `POST` response silently stops getting one. Nothing else about those responses changes.
+- A blank `If-Match` is refused with `412` rather than treated as absent. The realistic shape is a client templating `If-Match: ${etag}` with an empty variable: the header is present and carries zero valid members, so collapsing it to "absent" let the write through unguarded on a route without `required` and clobbered the record. `If-Match: ,` was already `412` and is the same state.
+- `Validator` now rejects an entity tag containing a comma, throwing `InvalidArgumentException` from its constructor alongside the existing empty, double-quote, and control-character rejections. A comma is legal `etagc` but splits the tag across two members of an `If-Match` list, neither of which can ever match — a permanent `412` on that resource. The package's own strategies emit hex and cannot reach it; a custom `ValidatorStrategy` handing a raw column value straight to `Validator` can, and now fails loudly instead of emitting an unusable tag.
 
 ### Fixed
 

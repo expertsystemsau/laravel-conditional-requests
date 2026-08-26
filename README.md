@@ -24,7 +24,7 @@ Most Laravel packages in this space only do the first half, and only via ETag. T
 ## Status
 
 > [!WARNING]
-> **Pre-release — under active development.** The read path described below ships and is tested, model-derived validators and the pre-controller `304` short-circuit included. The write path (`conditional:required`, `412`, `428`), the `Last-Modified` family, and locking are not implemented yet — they are marked on the [roadmap](#roadmap) below. Nothing is stable until `v1.0.0`.
+> **Pre-release — under active development.** The read path and the write path described below both ship and are tested, model-derived validators and the pre-controller `304` short-circuit included. The `Last-Modified` family (`If-Modified-Since`, `If-Unmodified-Since`) and `lock` mode are not implemented yet — they are marked on the [roadmap](#roadmap) below. Nothing is stable until `v1.0.0`.
 
 ## Requirements
 
@@ -112,7 +112,7 @@ A flag always wins over the config key.
 > Neither key is validated at boot. A `strategy` that names nothing registered, or a `hash` that `hash()` does not know, is a `500` on every request that reaches an eligible route — `Conditional request strategy [nope] is not registered. Registered: body, model`, and `Hash algorithm [nope] is not supported. Check the laravel-conditional-requests.hash config value.` Only the hash message names the key at fault; the strategy message cannot, because the name it rejects may have arrived from a route flag rather than from the config, so it lists what is registered instead. Routes that name a valid strategy by flag keep working, but a typo in a published config file arrives in production as an outage across every conditional route rather than as a quiet loss of caching. Flag matching is case-sensitive too: `conditional:MODEL` is not `conditional:model`, and asks the registry for a strategy of that name.
 
 > [!WARNING]
-> `required` and `lock` are reserved words rather than strategy names, and both already select `model` today — that much is live, even though the write path they belong to is not. Putting `conditional:required` on a `GET` route ahead of `v0.3` therefore switches it from `body` to `model`, turning on the pre-controller short-circuit and [the authorization hazard that comes with it](#model-derived-validators) — and on a route whose bound model does not implement `ProvidesConditionalValidator`, leaving it with no `ETag` at all.
+> `required` and `lock` are reserved words rather than strategy names, and both select `model`. `required` guards the [write path](#conditional-writes-lost-update-protection); `lock` parses and does nothing yet. Both are unsafe-method flags, so putting either on a `GET` route guards nothing and only switches it from `body` to `model`, turning on the pre-controller short-circuit and [the authorization hazard that comes with it](#model-derived-validators) — and on a route whose bound model does not implement `ProvidesConditionalValidator`, leaving it with no `ETag` at all.
 
 ### Model-derived validators
 
@@ -241,8 +241,12 @@ final readonly class RevisionStrategy implements ValidatorStrategy
     {
         $article = $request->route('article');
 
-        // Returning null leaves the response untouched.
-        return $article ? new Validator((string) $article->revision) : null;
+        if (! $article) {
+            // Returning null leaves the response untouched.
+            return null;
+        }
+
+        return new Validator(hash('xxh128', (string) $article->revision));
     }
 }
 ```
@@ -261,6 +265,9 @@ public function boot(): void
 Route::get('/articles/{article}', ShowArticle::class)
     ->middleware('conditional:revision');
 ```
+
+> [!IMPORTANT]
+> `Validator` throws an `InvalidArgumentException` for a tag that cannot appear inside a quoted entity tag: an empty one, one containing a double quote or a control character, and one containing a **comma**. A comma is legal `etagc`, but `If-Match` and `If-None-Match` carry a comma-separated list, so a tag holding one splits into two malformed members the moment a client echoes it back — a permanent `412` on that resource. The package's own strategies emit hex and cannot reach it. A custom strategy handing a raw column straight to `Validator` can, which is why the example above hashes it. Hash the value, or use one that plainly cannot contain those characters.
 
 > [!IMPORTANT]
 > Call `extend()` from a service provider's `boot()` method only. The registry is a container singleton, so calling it from a controller, a route closure, or any other request handler permanently mutates shared state — under Laravel Octane that means for the whole worker, for every subsequent request it serves.
@@ -298,11 +305,7 @@ A validator identifies one specific set of bytes, and a reverse proxy that compr
 
 If `304`s work in local development and never in production, check the proxy first — `curl -sI -H 'Accept-Encoding: gzip' <url>` against the proxy and against the app directly will show the difference immediately.
 
-## Design contract — not yet implemented
-
-Everything in this section is the design contract for a later release and is **not implemented yet**; see the [roadmap](#roadmap).
-
-### Conditional writes (lost update protection)
+## Conditional writes (lost update protection)
 
 Require the client to state which version it believes it is modifying. A stale token is rejected with `412`; a missing one with `428`.
 
@@ -311,16 +314,13 @@ Route::patch('/articles/{article}', UpdateArticle::class)
     ->middleware('conditional:required');
 ```
 
-> [!NOTE]
-> The flag itself already parses today, and already selects the `model` strategy — see [Choosing a validator strategy](#choosing-a-validator-strategy). What is missing is the write path behind it: `If-Match` is not evaluated, and no `412` or `428` is ever returned. On a `GET` route it is not inert.
-
 ```http
 PATCH /articles/42
-If-Match: "d41d8cd98f00b204"
+If-Match: "9b1c0e0f6b0a4f9d"
 → 200 OK                    # still current, write applied
 
 PATCH /articles/42
-If-Match: "d41d8cd98f00b204"
+If-Match: "9b1c0e0f6b0a4f9d"
 → 412 Precondition Failed   # someone else got there first
 
 PATCH /articles/42
@@ -330,21 +330,80 @@ PATCH /articles/42
 
 `428` is the piece most implementations skip. Without it a client can simply omit the header and go straight back to clobbering other people's writes — the protection is opt-out by default. `conditional:required` makes it opt-in-by-force for the routes you choose.
 
+The guard applies to **every** unsafe method — `POST`, `PUT`, `PATCH`, and `DELETE`. MDN's canonical mid-air-collision example is a wiki save over `POST`, so restricting it to `PATCH` would miss the documented case.
+
+`If-Match` uses **strong** comparison, as RFC 9110 §13.1.1 requires: a `W/`-prefixed token never satisfies it, and neither does a weak validator on the server side. This is not configurable — see the caveat below.
+
+### Guarding a create
+
+`If-None-Match: *` is the mirror image: it succeeds only when the resource does **not** already exist. Two clients racing to create the same resource then produce one success and one `412`, instead of a silent duplicate or one overwriting the other.
+
+```http
+PUT /articles/42
+If-None-Match: *
+→ 200 OK                    # created
+
+PUT /articles/42
+If-None-Match: *
+→ 412 Precondition Failed   # someone else created it first
+```
+
+For the guard to be able to answer, the route has to address the resource being created and its binding has to be able to report "absent" rather than aborting. Implicit binding raises a `404` for a missing record before the middleware ever runs, so register an explicit binder that returns `null`:
+
+```php
+Route::bind('article', fn (string $value): ?Article => Article::query()->find($value));
+```
+
+On a collection route such as `POST /articles` there is no bound resource to ask about, so the create guard has nothing to compare and the request proceeds.
+
+### Requirements and caveats for guarded routes
+
+> [!IMPORTANT]
+> `conditional:required` must run **after** `SubstituteBindings`, and its model must produce a validator. Inside the `api` or `web` middleware group the ordering is already right. Get it wrong — kernel-global placement, or a hand-written list that puts `conditional` first — and the guard finds no record, treats every resource as absent, and refuses **every** `If-Match` with `412`. On the read path a wrong ordering only costs the compute saving; on the write path it stops writes.
+
+> [!IMPORTANT]
+> Under kernel-global placement only half of `exclude` can suppress the write guard. The decision has to precede the controller, and nothing has been routed at that point, so `Request::routeIs()` answers false for every pattern: a **route-name** exclusion such as `admin.*` is silently ignored on the write path there. **URI** patterns such as `internal/*` still work, as does `enabled => false`. Under route or group placement — the ordering the section above already requires — both halves work as documented.
+
+> [!IMPORTANT]
+> A model with no `version` column and no timestamps produces no validator, and a resource with no validator reads as absent. `If-Match: *` on such a route returns `412` every time. Add a `version` column or enable timestamps — the same rule the read path already needs.
+
+> [!WARNING]
+> Setting `weak => true` and flagging a route `required` is a configuration error and throws a `LogicException` on the first guarded request, naming the config key. A weak validator can never satisfy `If-Match`, so the pair would refuse every write with `412` and nothing in the response would say why. The same applies to naming a strategy that cannot produce a validator before the controller runs, such as `conditional:body,required`.
+
+> [!NOTE]
+> `If-Match` is evaluated first, per RFC 9110 §13.2.2; `If-None-Match` is consulted only in its absence. `If-Unmodified-Since` is not implemented yet, which means it does **not** satisfy `required` — a request carrying only that header still gets `428`.
+
+> [!NOTE]
+> `If-Match` closes the window between the client's read and its write, not the window between this check and the controller's own write. Two writes that both pass the guard microseconds apart can still race. `lock` mode, which re-evaluates the precondition inside a transaction holding a row lock, is on the roadmap.
+
+Both refusals are `Symfony\Component\HttpKernel\Exception\HttpException` subclasses, so your application's existing exception handler renders and customises them:
+
+```php
+use ExpertSystems\ConditionalRequests\Exceptions\PreconditionFailedException;
+
+$exceptions->render(function (PreconditionFailedException $e) {
+    return response()->json(['error' => 'stale'], 412);
+});
+```
+
+Their default bodies live in `lang/en/messages.php`; publish it with the `laravel-conditional-requests-lang` tag to reword them.
+
 ## Header reference
 
 | Request header | Applies to | On match | On mismatch | Ships |
 | --- | --- | --- | --- | --- |
 | `If-None-Match` | reads | `304 Not Modified` | `200 OK` with body | yes |
+| `If-None-Match: *` | writes | `412 Precondition Failed` | write proceeds | yes |
 | `If-Modified-Since` | reads | `304 Not Modified` | `200 OK` with body | no |
-| `If-Match` | writes | write proceeds | `412 Precondition Failed` | no |
+| `If-Match` | writes | write proceeds | `412 Precondition Failed` | yes |
 | `If-Unmodified-Since` | writes | write proceeds | `412 Precondition Failed` | no |
-| *(absent)* | writes, when required | — | `428 Precondition Required` | no |
+| *(absent)* | writes, when required | — | `428 Precondition Required` | yes |
 
 ## Roadmap
 
 - [x] `conditional` middleware — response validators and `304` short-circuiting
 - [x] Configurable exclusions — methods, status codes, routes, and response sizes
-- [ ] `conditional:required` middleware — `If-Match` enforcement with `412` / `428`
+- [x] `conditional:required` middleware — `If-Match` enforcement with `412` / `428`, on every unsafe method, plus the `If-None-Match: *` create guard
 - [x] Strong and weak ETag generation, with a configurable strategy
 - [ ] `Last-Modified` / `If-Modified-Since` support alongside ETags
 - [x] Model-derived validators, so an ETag comes from the record's version rather than a hash of the rendered body — including the pre-controller `304` short-circuit

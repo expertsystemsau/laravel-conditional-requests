@@ -83,7 +83,11 @@ return [
     | Eligible Methods
     |--------------------------------------------------------------------------
     |
-    | Request methods that take part in the read path.
+    | Request methods that take part in the read path. This does not gate the
+    | write path: every unsafe method — POST, PUT, PATCH, DELETE — is guarded
+    | when a route carries the middleware, and adding one here does not start
+    | attaching validators to its responses. Use "exclude" to opt a route out
+    | of both paths at once.
     |
     */
 
