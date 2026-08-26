@@ -2,10 +2,12 @@
 
 declare(strict_types=1);
 
+use ExpertSystems\ConditionalRequests\Contracts\ProvidesConditionalValidator;
 use ExpertSystems\ConditionalRequests\Contracts\RequestValidatorStrategy;
 use ExpertSystems\ConditionalRequests\Contracts\ValidatorStrategy;
 use ExpertSystems\ConditionalRequests\Facades\ConditionalRequests;
 use ExpertSystems\ConditionalRequests\Tests\Fixtures\Article;
+use ExpertSystems\ConditionalRequests\Tests\Fixtures\Note;
 use Illuminate\Routing\Middleware\SubstituteBindings;
 use Illuminate\Support\Facades\Route;
 
@@ -136,3 +138,56 @@ it('still rejects an unknown strategy name on the write path', function (): void
 
     $this->put('/articles/1');
 })->throws(InvalidArgumentException::class, 'Conditional request strategy [nope] is not registered.');
+
+it('refuses to guard a write route that binds more than one conditional record', function (): void {
+    // PATCH /articles/{article}/comments/{comment} is the everyday shape. The
+    // guard tracked the article while the controller wrote the comment, so the
+    // client sending the comment's tag was refused and the client sending the
+    // article's tag overwrote it.
+    $this->withoutExceptionHandling();
+
+    Note::create(['body' => 'Nested']);
+
+    Route::middleware([SubstituteBindings::class, 'conditional:required'])
+        ->patch('/articles/{article}/notes/{note}', fn (Article $article, Note $note): array => ['body' => $note->body]);
+
+    expect(fn () => $this->patch('/articles/1/notes/1', [], ['If-Match' => '*']))
+        ->toThrow(function (LogicException $e): void {
+            expect($e->getMessage())
+                ->toContain('articles/{article}/notes/{note}')
+                ->toContain('[article, note]')
+                ->toContain(ProvidesConditionalValidator::class);
+        });
+});
+
+it('raises the ambiguity error whatever precondition the client sends', function (): void {
+    // A client cannot hide the misconfiguration by sending the header that
+    // happened to work, or by sending none at all.
+    $this->withoutExceptionHandling();
+
+    Note::create(['body' => 'Nested']);
+
+    Route::middleware([SubstituteBindings::class, 'conditional:model'])
+        ->patch('/articles/{article}/notes/{note}', fn (Article $article, Note $note): array => ['body' => $note->body]);
+
+    foreach ([[], ['If-Match' => '"anything"'], ['If-None-Match' => '*']] as $headers) {
+        expect(fn () => $this->patch('/articles/1/notes/1', [], $headers))
+            ->toThrow(LogicException::class, 'binds more than one record implementing');
+    }
+});
+
+it('leaves a nested read route tagging the first record', function (): void {
+    // The read path's first-wins rule is documented and harmless: only the
+    // write path asks which record it is protecting.
+    Note::create(['body' => 'Nested']);
+
+    Route::middleware([SubstituteBindings::class, 'conditional:model'])
+        ->get('/articles/{article}/notes/{note}', fn (Article $article, Note $note): array => ['body' => $note->body]);
+
+    Route::middleware([SubstituteBindings::class, 'conditional:model'])
+        ->get('/articles/{article}', fn (Article $article): array => ['title' => $article->title]);
+
+    expect($this->get('/articles/1/notes/1')->headers->get('ETag'))
+        ->not->toBeNull()
+        ->toBe($this->get('/articles/1')->headers->get('ETag'));
+});

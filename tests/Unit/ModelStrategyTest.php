@@ -175,3 +175,31 @@ it('cannot tell whether a target exists on an unbound route', function (): void 
 
     expect((new ModelStrategy)->targetExists($request))->toBeNull();
 });
+
+it('refuses to answer for a route binding more than one conditional record', function (): void {
+    $request = routedRequest('/articles/1/notes/9', '/articles/{article}/notes/{note}', [
+        'article' => fixtureArticleFor(1),
+        'note' => (new Note)->forceFill(['id' => 9, 'body' => 'Nested', 'updated_at' => '2026-08-25 10:00:00']),
+    ]);
+
+    expect(fn () => (new ModelStrategy)->targetExists($request))->toThrow(function (LogicException $e): void {
+        expect($e->getMessage())
+            ->toContain('articles/{article}/notes/{note}')
+            ->toContain('[article, note]')
+            ->toContain(ProvidesConditionalValidator::class);
+    });
+});
+
+it('leaves the read path first wins rule alone on the same route', function (): void {
+    // targetExists() is the write path's question and the only place the
+    // ambiguity is fatal. fromRequest() still answers, still first-wins.
+    $article = fixtureArticleFor(1);
+
+    $request = routedRequest('/articles/1/notes/9', '/articles/{article}/notes/{note}', [
+        'article' => $article,
+        'note' => (new Note)->forceFill(['id' => 9, 'body' => 'Nested', 'updated_at' => '2026-08-25 10:00:00']),
+    ]);
+
+    expect((new ModelStrategy)->fromRequest($request)?->etag)
+        ->toBe($article->conditionalValidator($request)?->etag);
+});

@@ -8,6 +8,7 @@ use ExpertSystems\ConditionalRequests\Contracts\ProvidesConditionalValidator;
 use ExpertSystems\ConditionalRequests\Contracts\RequestValidatorStrategy;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Route;
+use LogicException;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
@@ -67,6 +68,18 @@ final readonly class ModelStrategy implements RequestValidatorStrategy
      *    answered null, or a collection route such as `POST /articles` that
      *    addresses no record at all. Both are a definite false, and a create
      *    against them proceeds.
+     *
+     * A route binding more than one record that implements the contract has no
+     * answer at all, and raises a configuration error rather than picking one.
+     * The read path's first-wins rule is documented and harmless there — the
+     * tag on `/articles/{article}/comments/{comment}` simply tracks the
+     * article. On a write it inverts the guard: the controller on a nested
+     * route usually writes the last record, so the client sending the tag of
+     * the record it is modifying is refused with 412 and the write lands only
+     * when it sends the tag of a record it is not touching. Only the write path
+     * asks this question, so the read path keeps its rule untouched.
+     *
+     * @throws LogicException when the route binds more than one conditional record
      */
     public function targetExists(Request $request): ?bool
     {
@@ -77,17 +90,36 @@ final readonly class ModelStrategy implements RequestValidatorStrategy
             return null;
         }
 
+        /** @var list<string> $candidates */
+        $candidates = [];
         $unsubstituted = false;
 
-        foreach ($route->parameters() as $parameter) {
+        foreach ($route->parameters() as $name => $parameter) {
             if ($parameter instanceof ProvidesConditionalValidator) {
-                return true;
+                $candidates[] = (string) $name;
+
+                continue;
             }
 
             $unsubstituted = $unsubstituted || is_string($parameter);
         }
 
-        return $unsubstituted ? null : false;
+        if (count($candidates) > 1) {
+            throw new LogicException(sprintf(
+                '[%s %s] binds more than one record implementing %s [%s], so the conditional write guard '
+                .'cannot tell which record the write is protecting. The first bound parameter wins, and the '
+                .'controller on a nested route usually writes the last — so the client naming the record it '
+                .'is modifying is refused with 412 while the one naming a record it is not touching writes. '
+                .'Implement the contract only on the record this route represents, or override '
+                .'conditionalValidator() on that record to fold the other one in.',
+                $request->getMethod(),
+                $route->uri(),
+                ProvidesConditionalValidator::class,
+                implode(', ', $candidates),
+            ));
+        }
+
+        return $candidates !== [] ? true : ($unsubstituted ? null : false);
     }
 
     /**
