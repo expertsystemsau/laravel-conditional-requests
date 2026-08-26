@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ExpertSystems\ConditionalRequests\Http\Middleware;
 
 use Closure;
+use DateTimeImmutable;
 use ExpertSystems\ConditionalRequests\ConditionalRequests;
 use ExpertSystems\ConditionalRequests\Contracts\RequestValidatorStrategy;
 use ExpertSystems\ConditionalRequests\Contracts\ValidatorStrategy;
@@ -257,11 +258,47 @@ final readonly class Conditional
         }
 
         $response->setEtag($validator->etag, $validator->weak);
+        $this->attachLastModified($response, $validator);
 
         // Symfony performs the RFC 9110 comparison and, on a match, mutates the
         // response into a compliant 304 — status, empty body, stripped headers.
         if ($response->isNotModified($request)) {
             $this->complete($request, $response);
+        }
+    }
+
+    /**
+     * Publish the validator's modification date without changing what the
+     * response says about caching.
+     *
+     * Both halves are deliberate. A date the application set itself is left
+     * alone, for the same reason an application's own ETag is (§7) — and it is
+     * checked with has() rather than getLastModified(), because
+     * HeaderBag::getDate() throws on a value it cannot parse.
+     *
+     * The Cache-Control dance is the surprising half. Symfony recomputes an
+     * unset Cache-Control the moment a Last-Modified appears
+     * (ResponseHeaderBag.php:239), turning the conservative "no-cache, private"
+     * into "private, must-revalidate" to allow heuristic expiration — which
+     * lets a browser reuse its copy for a fraction of the document's age
+     * without revalidating at all. A package whose whole purpose is
+     * revalidation must not be what stops a resource revalidating, and design
+     * §10 makes cache policy a non-goal, so whatever the response said before
+     * is what it says after. An application that set a policy explicitly is
+     * untouched either way: its own value suppresses the recomputation.
+     */
+    private function attachLastModified(Response $response, Validator $validator): void
+    {
+        if (! $validator->lastModified instanceof DateTimeImmutable || $response->headers->has('Last-Modified')) {
+            return;
+        }
+
+        $cacheControl = $response->headers->get('Cache-Control');
+
+        $response->setLastModified($validator->lastModified);
+
+        if ($cacheControl !== null && $response->headers->get('Cache-Control') !== $cacheControl) {
+            $response->headers->set('Cache-Control', $cacheControl);
         }
     }
 
@@ -306,6 +343,7 @@ final readonly class Conditional
 
         $response = new IlluminateResponse;
         $response->setEtag($validator->etag, $validator->weak);
+        $this->attachLastModified($response, $validator);
 
         return $response->isNotModified($request) ? $this->complete($request, $response) : null;
     }
