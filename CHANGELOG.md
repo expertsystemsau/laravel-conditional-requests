@@ -4,7 +4,7 @@ All notable changes to `laravel-conditional-requests` are documented in this fil
 
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased](https://github.com/expertsystemsau/laravel-conditional-requests/compare/v1.0.0...main)
+## [Unreleased](https://github.com/expertsystemsau/laravel-conditional-requests/compare/v1.0.1...HEAD)
 
 ### Fixed
 
@@ -18,7 +18,7 @@ v1.0.0 code is unaffected.
   short-circuited `304` before it calls `$next($request)`, so nothing declared
   after this middleware is entered at all. The advice named the one position
   where the header is guaranteed not to appear.
-
+  
   Position was never the discriminator. The *outside* middleware does run and
   does see the `304` on the way out; Laravel's `SetCacheHeaders` loses the header
   because it returns early on a contentless response, not because of where it
@@ -28,17 +28,55 @@ v1.0.0 code is unaffected.
   when `fromRequest()` declined — where `attach()` marks the real response and
   `setNotModified()` leaves `Cache-Control` alone. The two cases are now stated
   separately rather than collapsed into one claim about ordering.
-
+  
 - **`docs/placement.md` carried the same inversion twice**, under "What must run
   inside `conditional`" and in its closing nuance. [H7](docs/hazards.md#h7) was
   already correct and says explicitly that ordering does not help under `model`;
   H6 and this page now agree with it.
-
+  
 - **`docs/api.md` undercounted the API-freeze examples.** It said "Four further
   examples" in `PublicApiTest.php` and listed four; there are five. The missing
   one freezes the strategy contract inheritance chain, and it is the only thing
   asserting that chain — the signature snapshot records no `extends`
   relationships — for a promise the same page makes a hundred lines earlier.
+  
+
+## [v1.0.1](https://github.com/expertsystemsau/laravel-conditional-requests/compare/v1.0.0...v1.0.1) - 2026-08-26
+
+### Fixed
+
+Documentation only. No behaviour changed, and no published symbol moved — the
+v1.0.0 code is unaffected.
+
+- **[H6](docs/hazards.md#h6) prescribed a remedy that cannot run.** It told the
+  reader to set `Cache-Control` from middleware declared *inside* `conditional`.
+  On the path H6 is about — a `model` route whose cached entry successfully
+  revalidates — that middleware never executes: `handle()` returns the
+  short-circuited `304` before it calls `$next($request)`, so nothing declared
+  after this middleware is entered at all. The advice named the one position
+  where the header is guaranteed not to appear.
+  
+  Position was never the discriminator. The *outside* middleware does run and
+  does see the `304` on the way out; Laravel's `SetCacheHeaders` loses the header
+  because it returns early on a contentless response, not because of where it
+  sits. The remedy is an outside middleware that sets the header
+  unconditionally, or keeping a cache-policy route off `model`. Inside remains
+  correct for a `304` decided *after* the controller ran — `body`, or `model`
+  when `fromRequest()` declined — where `attach()` marks the real response and
+  `setNotModified()` leaves `Cache-Control` alone. The two cases are now stated
+  separately rather than collapsed into one claim about ordering.
+  
+- **`docs/placement.md` carried the same inversion twice**, under "What must run
+  inside `conditional`" and in its closing nuance. [H7](docs/hazards.md#h7) was
+  already correct and says explicitly that ordering does not help under `model`;
+  H6 and this page now agree with it.
+  
+- **`docs/api.md` undercounted the API-freeze examples.** It said "Four further
+  examples" in `PublicApiTest.php` and listed four; there are five. The missing
+  one freezes the strategy contract inheritance chain, and it is the only thing
+  asserting that chain — the signature snapshot records no `extends`
+  relationships — for a promise the same page makes a hundred lines earlier.
+  
 
 ## [v1.0.0](https://github.com/expertsystemsau/laravel-conditional-requests/releases/tag/v1.0.0) - 2026-08-26
 
