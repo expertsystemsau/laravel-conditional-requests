@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace ExpertSystems\ConditionalRequests\Concerns;
 
+use DateTimeInterface;
 use ExpertSystems\ConditionalRequests\Validators\Validator;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
+use InvalidArgumentException;
 
 /**
  * The default ProvidesConditionalValidator implementation for an Eloquent model.
@@ -43,6 +45,10 @@ use Illuminate\Http\Request;
  * into the tag has to override conditionalValidator() itself rather than
  * conditionalVersionColumns().
  *
+ * The validator also carries the record's modification date, subject to one
+ * rule: an instant whose second has not finished yet is not published at all.
+ * See conditionalLastModified() for why.
+ *
  * @phpstan-require-extends Model
  */
 trait HasConditionalValidator
@@ -66,7 +72,7 @@ trait HasConditionalValidator
             ...$this->conditionalLocation(),
             (string) $key,
             $version,
-        ])));
+        ])), lastModified: $this->conditionalLastModified());
     }
 
     /**
@@ -114,6 +120,78 @@ trait HasConditionalValidator
         }
 
         return $columns;
+    }
+
+    /**
+     * The column holding the record's modification date, or null when it has none.
+     *
+     * Override to point at a different column, or to return null on a model
+     * that should publish no Last-Modified. Returning null does not affect the
+     * entity tag, which keeps validating the record either way.
+     */
+    protected function conditionalLastModifiedColumn(): ?string
+    {
+        if (! $this->usesTimestamps()) {
+            return null;
+        }
+
+        $column = $this->getUpdatedAtColumn();
+
+        return is_string($column) ? $column : null;
+    }
+
+    /**
+     * The record's modification instant, or null when it has none this response
+     * can safely publish.
+     *
+     * The comparison at the end is the whole Last-Modified problem in one line.
+     * An HTTP-date has one-second resolution (RFC 9110 §5.6.7), so a record
+     * modified at 12:00:00.700 can only be advertised as 12:00:00 — and if it
+     * is modified again at 12:00:00.900, a client echoing 12:00:00 back would
+     * be told 304 while holding a stale representation. The same is true of a
+     * whole-second column, where both writes literally store 12:00:00: it is
+     * the wire format's granularity, not the column's.
+     *
+     * RFC 9110 §8.8.2.2 permits a date validator to be treated as strong only
+     * when the server "reliably knows that the associated representation did
+     * not change twice during the second covered by the presented validator".
+     * That cannot be known about a second that is still running, and is always
+     * true of one that has finished. So a date is published only once its
+     * second has fully elapsed, which also suppresses a future-dated value
+     * from a skewed clock — the same comparison, the other side of it.
+     *
+     * The cost is bounded: for the remainder of the second in which a record
+     * changed, its responses carry an entity tag and no date. The tag is
+     * derived from the raw column at whatever precision it stores, so it keeps
+     * validating during exactly the window in which the date cannot.
+     *
+     * The clock is the model's own — freshTimestamp() is what Eloquent used to
+     * write the column in the first place, it honours Carbon::setTestNow(), and
+     * an application that overrides it gets one clock rather than two.
+     */
+    private function conditionalLastModified(): ?DateTimeInterface
+    {
+        $column = $this->conditionalLastModifiedColumn();
+
+        if ($column === null || ! array_key_exists($column, $this->getAttributes())) {
+            return null;
+        }
+
+        try {
+            $modified = $this->getAttribute($column);
+        } catch (InvalidArgumentException) {
+            // A stored value the model's date format cannot parse. A validator
+            // is an optimisation and is never the reason a request fails —
+            // the same degradation Conditional::stringList() applies to a
+            // malformed config value.
+            return null;
+        }
+
+        if (! $modified instanceof DateTimeInterface) {
+            return null;
+        }
+
+        return $modified->getTimestamp() >= $this->freshTimestamp()->getTimestamp() ? null : $modified;
     }
 
     /**
