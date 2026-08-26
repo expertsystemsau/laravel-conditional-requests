@@ -21,7 +21,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - A `LogicException` naming the offending configuration when `required` is paired with weak validators or with a strategy that cannot answer before the controller runs.
 - Real `412` / `428` copy in `lang/en/messages.php`, publishable with the `laravel-conditional-requests-lang` tag.
 - `Last-Modified` on model-derived responses, published only once the second holding the change has elapsed so a client can never be told `304` about a representation that changed twice in one second.
-- `If-Modified-Since` handling on the read path, including the pre-controller short-circuit — a matching date never executes the route action.
+- `If-Modified-Since` handling on the read path, answered after the controller: a date needs no prior access, so a date-only client is refused the pre-controller short-circuit for the same reason `If-None-Match: *` is. A date sent alongside a matching `If-None-Match` still short-circuits.
 - `If-Unmodified-Since` on the write path, evaluated at RFC 9110 §13.2.2's precedence position between `If-Match` and `If-None-Match`, and satisfying `required`.
 - `lastModified` on `Validator`, as a trailing optional constructor argument floored to the whole second and normalised to UTC.
 - `conditionalLastModifiedColumn()` on `HasConditionalValidator`, for a model whose modification date lives somewhere other than `updated_at`.
@@ -29,6 +29,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- A lone `If-Modified-Since` does not take the pre-controller short-circuit. A date needs no prior access — a client can guess one — so an early `304` on it would confirm a record's existence and, by bisection, the second it last changed in, to a client holding nothing and cleared by nothing declared after `conditional`. Such a request runs the controller and everything after `conditional`, and its `304` is decided at the end; the response is unchanged, only the compute saving is surrendered. A date accompanied by a matching `If-None-Match` still short-circuits.
 - `If-None-Match: *` no longer takes the pre-controller short-circuit. A bare wildcard matches every validator there is, so answering it early confirmed a record to a client holding no tag and cleared by nothing declared after `conditional` — behind an authorization gate in that position, a working existence oracle. Such a request now takes the ordinary path and its `304` is decided after the controller, exactly as under `body`. A wildcard accompanied by a tag that does match still short-circuits.
 - Streamed, binary, and oversized responses now carry a validator when the strategy has already derived one from the request rather than from the body.
 - A `HEAD` request is no longer presented to the controller as a `GET` when the strategy does not need the rendered body.

@@ -42,8 +42,12 @@ it('answers a matching If-Modified-Since with 304', function (): void {
 
     $this->get('/readings/1', ['If-Modified-Since' => $lastModified])->assertStatus(304);
 
-    // Answered before the controller, exactly as If-None-Match is.
-    expect($runs)->toBe(0);
+    // Answered after the controller, unlike a matching If-None-Match. A date
+    // needs no prior access, so a date-only client is refused the pre-controller
+    // short-circuit for the same reason `If-None-Match: *` is — see
+    // Conditional::dateOnly(). The 304 above is unchanged; only the compute
+    // saving is surrendered.
+    expect($runs)->toBe(1);
 });
 
 it('answers a stale If-Modified-Since with the representation', function (): void {
@@ -158,11 +162,16 @@ it('honours a matching If-None-Match over a stale date', function (): void {
     datedReadingRoute($runs);
 
     $etag = (string) $this->get('/readings/1')->headers->get('ETag');
+    $runs = 0;
 
     $this->get('/readings/1', [
         'If-None-Match' => $etag,
         'If-Modified-Since' => 'Wed, 26 Aug 2026 11:00:00 GMT',
     ])->assertStatus(304);
+
+    // The date arrived alongside a tag the client demonstrably holds, so the
+    // short-circuit stands — the same line dateOnly() draws.
+    expect($runs)->toBe(0);
 });
 
 it('ignores a malformed If-Modified-Since rather than failing', function (): void {

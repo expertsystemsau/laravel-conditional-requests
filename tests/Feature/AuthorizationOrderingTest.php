@@ -6,6 +6,7 @@ use ExpertSystems\ConditionalRequests\Tests\Fixtures\Article;
 use Illuminate\Auth\Middleware\Authorize;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Routing\Middleware\SubstituteBindings;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Route;
 
@@ -127,4 +128,48 @@ it('answers 403 and never 304 when authorization runs before conditional', funct
     // The mitigation: the request is rejected before the strategy is ever
     // consulted, so a still-matching tag buys the client nothing.
     $this->get('/articles/1', ['If-None-Match' => $etag])->assertStatus(403);
+});
+
+it('reaches authorization for a date, which needs no prior access either', function (): void {
+    articleRouteGuardedBy([
+        SubstituteBindings::class,
+        'conditional:model',
+        Authorize::class.':view-article,article',
+    ], $allowed);
+
+    // Far enough past the write for the record's second to have closed, which
+    // is what lets the validator carry a date at all.
+    $this->travelTo(Carbon::now()->addSeconds(5));
+
+    $allowed = false;
+
+    // A date is the second zero-knowledge route to a pre-controller 304.
+    // Response::isNotModified() takes its date branch whenever the client sent
+    // no entity tags, so a far-future If-Modified-Since matches whatever the
+    // record's modification date turns out to be — 304 for a record that
+    // exists, 404 for one that does not, and by bisecting the date, the exact
+    // second it last changed in. All of it behind a gate that never runs and
+    // for a client that has never held the representation. So the date-only
+    // client is refused the short-circuit and the gate gets the request.
+    $this->get('/articles/1', ['If-Modified-Since' => 'Thu, 01 Jan 2099 00:00:00 GMT'])->assertStatus(403);
+});
+
+it('reaches authorization for a date sent with a tag the client does not hold', function (): void {
+    articleRouteGuardedBy([
+        SubstituteBindings::class,
+        'conditional:model',
+        Authorize::class.':view-article,article',
+    ], $allowed);
+
+    $this->travelTo(Carbon::now()->addSeconds(5));
+
+    $allowed = false;
+
+    // A stale tag is not prior access, and §13.2.2 step 3 answers it before the
+    // date is ever consulted. Only a tag the client actually holds keeps the
+    // short-circuit.
+    $this->get('/articles/1', [
+        'If-None-Match' => '"stale-tag"',
+        'If-Modified-Since' => 'Thu, 01 Jan 2099 00:00:00 GMT',
+    ])->assertStatus(403);
 });

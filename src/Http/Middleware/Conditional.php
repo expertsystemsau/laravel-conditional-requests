@@ -337,7 +337,7 @@ final readonly class Conditional
      */
     private function notModified(Request $request, Validator $validator): ?Response
     {
-        if ($this->wildcardOnly($request, $validator)) {
+        if ($this->wildcardOnly($request, $validator) || $this->dateOnly($request)) {
             return null;
         }
 
@@ -346,6 +346,34 @@ final readonly class Conditional
         $this->attachLastModified($response, $validator);
 
         return $response->isNotModified($request) ? $this->complete($request, $response) : null;
+    }
+
+    /**
+     * Whether a date is the only thing the client has offered.
+     *
+     * The same rule wildcardOnly() draws, drawn on the other header.
+     * Response::isNotModified() takes its date branch whenever the client sent
+     * no entity tags, so `If-Modified-Since` with a far-future date short-
+     * circuits to 304 for a client that holds nothing — a date needs no prior
+     * access, exactly as `If-None-Match: *` does not. Behind a gate declared
+     * after `conditional` the status code would hand a client that has never
+     * held the representation both its existence and, by bisection on the date,
+     * the second it last changed in; any rate limiter, subscription check or
+     * other middleware in that position is bypassed with zero knowledge too.
+     *
+     * Falling through surrenders the compute saving for date-only clients and
+     * nothing else. The controller and every later middleware run, attach()
+     * hands the response to the same Symfony comparison, and a client that is
+     * allowed through still gets its 304 — only later.
+     *
+     * A date sent ALONGSIDE a matching tag keeps the short-circuit: that client
+     * demonstrably holds the version, which is the line the wildcard rule
+     * already draws. getETags() reads If-None-Match, so a non-empty list means
+     * wildcardOnly() has already had its say about what those tags were.
+     */
+    private function dateOnly(Request $request): bool
+    {
+        return $request->getETags() === [] && $request->headers->has('If-Modified-Since');
     }
 
     /**
