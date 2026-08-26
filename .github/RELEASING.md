@@ -81,13 +81,18 @@ So after publishing, and after `git pull`, expect to do all of this by hand in
 one commit:
 
 - Empty the `[Unreleased]` section, leaving the heading and no body.
-- Repair both heading links. The action builds them by appending to whatever URL
-  the `[Unreleased]` heading already carried, so with `commits/main` in place it
-  emitted `…/commits/main/compare/v1.0.0...HEAD` and
-  `…/commits/main/compare/main...v1.0.0` — both 404. They should be
-  `…/compare/v1.0.0...main` for `[Unreleased]`, and for the first release
-  `…/releases/tag/v1.0.0` for the version heading, since there is no earlier tag
-  to compare against.
+- Check both heading links. The action builds them by appending to whatever URL
+  the `[Unreleased]` heading already carried. On v1.0.0 that was `commits/main`,
+  so it emitted `…/commits/main/compare/v1.0.0...HEAD` and
+  `…/commits/main/compare/main...v1.0.0` — both 404. Now that `[Unreleased]`
+  carries a proper `…/compare/vX.Y.Z...main` base, the links come out correct on
+  their own: v1.0.1 produced `…/compare/v1.0.1...HEAD` and
+  `…/compare/v1.0.0...v1.0.1`, both resolving. Only change `HEAD` to `main`, to
+  match the rest of the file.
+
+  The one heading that needs a hand-written link is the **first** release, which
+  has no earlier tag to compare against — v1.0.0 points at
+  `…/releases/tag/v1.0.0`.
 
 Two exceptions worth writing down:
 
