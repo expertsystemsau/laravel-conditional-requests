@@ -4,84 +4,75 @@ All notable changes to `laravel-conditional-requests` are documented in this fil
 
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased](https://github.com/expertsystemsau/laravel-conditional-requests/compare/v0.1.0...main)
+## [Unreleased](https://github.com/expertsystemsau/laravel-conditional-requests/commits/main)
 
 ### Added
 
-- `model` validator strategy, deriving a strong `ETag` from a route-bound record's own version.
-- `ProvidesConditionalValidator` contract and `HasConditionalValidator` trait for models.
-- `RequestValidatorStrategy` contract, for strategies that can answer before the controller runs.
-- Pre-controller `304` short-circuit: a matching `If-None-Match` on a model-derived route never executes the route action.
-- Order-independent middleware flags, with `required` and `lock` reserved and implying the `model` strategy.
-- Write path: `If-Match` evaluated with strong comparison before the controller runs, refusing a stale write with `412 Precondition Failed`.
-- `If-None-Match: *` create guard, so two clients racing to create the same resource produce one success and one `412`.
-- `required` flag, answering an unsafe request that carries no precondition with `428 Precondition Required`.
-- `PreconditionEvaluator`, implementing the RFC 9110 §13 comparisons HttpFoundation does not have.
-- `PreconditionFailedException` and `PreconditionRequiredException`, rendered through the application's own exception handler.
-- A `LogicException` naming the offending configuration when `required` is paired with weak validators or with a strategy that cannot answer before the controller runs.
-- Real `412` / `428` copy in `lang/en/messages.php`, publishable with the `laravel-conditional-requests-lang` tag.
-- `Last-Modified` on model-derived responses, published only once the second holding the change has elapsed so a client can never be told `304` about a representation that changed twice in one second.
-- `If-Modified-Since` handling on the read path, answered after the controller: a date needs no prior access, so a date-only client is refused the pre-controller short-circuit for the same reason `If-None-Match: *` is. A date sent alongside a matching `If-None-Match` still short-circuits.
-- `If-Unmodified-Since` on the write path, evaluated at RFC 9110 §13.2.2's precedence position between `If-Match` and `If-None-Match`, and satisfying `required`.
-- `lastModified` on `Validator`, as a trailing optional constructor argument floored to the whole second and normalised to UTC.
-- `conditionalLastModifiedColumn()` on `HasConditionalValidator`, for a model whose modification date lives somewhere other than `updated_at`.
-- `last_modified` config key, defaulting to `true`, turning the whole family off in one line.
+**The middleware and its flags**
 
-- `lock` middleware flag: a transaction on the target record's own connection, a `SELECT … FOR UPDATE` re-read, and **the precondition evaluated a second time inside the lock** — which is what closes the check-then-write race `If-Match` alone leaves open.
-- `LockableValidatorStrategy` contract, implemented by the `model` strategy, naming the row a guarded write is about to change.
-- `lock_timeout` configuration key, applied per request on PostgreSQL and MySQL / MariaDB, answering an expired wait with `503 Service Unavailable` and a `Retry-After` rather than an opaque `500`.
+- `conditional` route middleware, implementing RFC 9110 §13 conditional requests on both the read and the write path.
+- Order-independent middleware flags: a strategy name, plus the reserved words `required` and `lock`, both of which imply the `model` strategy because the current validator has to be known before the controller runs.
+- `Http\Middleware\Conditional` is registered as the `conditional` alias on every boot, and works as route, group, or kernel-global middleware.
+
+**Validator strategies and the registry**
+
+- `body` strategy: a hash of the rendered response, working on any route with no model changes. Saves bandwidth, not compute.
+- `model` strategy: a strong validator derived from the route-bound record's own version — the connection's database name, the connection's table prefix, the table, the key, and either an explicit `version` column or the raw `updated_at` value. Saves bandwidth and compute.
+- `ValidatorStrategy`, `RequestValidatorStrategy` and `LockableValidatorStrategy` contracts, so an application can register its own strategy under any name and use it as a middleware flag.
+- `ConditionalRequests` strategy registry, resolved from the container and extended from a service provider's `boot()`.
+- `ProvidesConditionalValidator` contract and `HasConditionalValidator` trait, with `conditionalVersionColumns()` and `conditionalLastModifiedColumn()` as the documented extension points.
+- `Validator` value object: a bare entity tag, a weakness flag, and an optional modification instant floored to the whole second in UTC. It rejects a tag that cannot appear inside a quoted entity tag — empty, or containing a double quote, a control character, or a comma, the last of which would split the tag across two members of an `If-Match` list and pin the resource at `412`.
+
+**The read path**
+
+- `ETag` attached to eligible 2xx responses, and `304 Not Modified` decided by Symfony's own `Response::isNotModified()`, including tag lists and the bare `*` wildcard.
+- Pre-controller `304` short-circuit under any strategy that can answer from the request: a matching `If-None-Match` on a model-derived route never executes the route action.
+- The short-circuit is refused to a client that has demonstrated nothing. A bare `If-None-Match: *` matches every validator there is, and a lone `If-Modified-Since` can be guessed, so neither is answered before the controller — behind a gate declared after `conditional`, either would have made the status code an existence oracle. Both take the ordinary path and get the same `304` at the end. A wildcard or a date sent *alongside* a tag that matches still short-circuits.
+- Eligibility rules skipping unsuccessful, already-tagged, streamed, binary, oversized, and empty-bodied responses — with the streamed, binary and size rules suppressed when the strategy already derived a validator from the request, because that one cost no body read.
+- A `304` the middleware produces is prepared, so it leaves without a `Content-Type` of PHP's own choosing under kernel-global placement, where nothing else re-prepares it.
+- `HEAD` support: the request is presented to the controller as a `GET` only where a body hash is actually needed and a route has already been resolved, and the response body is emptied again on the way out.
+
+**`Last-Modified`**
+
+- `Last-Modified` on model-derived responses, alongside the `ETag`, with `If-Modified-Since` answered on the read path.
+- A date is published only once the second holding the change has elapsed. RFC 9110 §8.8.2.2 permits a date validator to be treated as strong only when the server knows the representation did not change twice inside the second it names, which is unknowable while that second is still running — so a record that has just changed carries its `ETag` alone until the second is over.
+- Attaching a date never changes what a response says about caching: Symfony would otherwise recompute an unset `Cache-Control` into one permitting heuristic freshness, and the middleware puts the original back.
+
+**The write path**
+
+- `If-Match` evaluated with strong comparison before the controller runs, refusing a stale write with `412 Precondition Failed` — on **every** unsafe method, not only `PATCH`. A blank `If-Match`, and `If-Match: W/*`, are both refused rather than treated as absent.
+- `required` flag, answering an unsafe request that carries no precondition with `428 Precondition Required`. It is satisfied by an `If-Match`, by `If-None-Match: *`, or by a valid `If-Unmodified-Since` — and never by a concrete `If-None-Match`, which states no version the client believes it is writing over.
+- `If-None-Match: *` create guard, so two clients racing to create the same resource produce one success and one `412`. It writes only on a *definite* absence, asked of the strategy through `targetExists()` separately from the version, so a strategy that cannot tell fails closed.
+- `If-Unmodified-Since` on the write path, at RFC 9110 §13.2.2's precedence position between `If-Match` and `If-None-Match`. A resource that publishes no date refuses it with `412` rather than ignoring it.
+- A precondition the route's strategy cannot evaluate is refused with `412` rather than discarded, so a client is never told a guard passed when it was never applied. A kernel-global instance defers that refusal to the route, which is what keeps the guards on the routes underneath it working.
+- `PreconditionFailedException` and `PreconditionRequiredException`, both Symfony `HttpException` subclasses rendered through the application's own exception handler, with real copy in `lang/en/messages.php`.
+
+**`lock` mode**
+
+- `lock` middleware flag: a transaction on the target record's own connection, a `SELECT … FOR UPDATE` re-read, and **the precondition evaluated a second time inside the lock** — which is what closes the check-then-write race `If-Match` alone leaves open. Opt-in, per route.
+- `lock_timeout` configuration key, applied per request on PostgreSQL (`SET LOCAL lock_timeout`) and MySQL / MariaDB (`SET SESSION innodb_lock_wait_timeout`, restored afterwards), answering an expired wait with `503 Service Unavailable` and a `Retry-After` rather than an opaque `500`.
 - `LockTimeoutException`, catchable as Symfony's `ServiceUnavailableHttpException`.
-- A `LogicException` naming the route when `lock` is applied to a strategy that cannot name a row, or to a resource that is not one.
 - `composer test:lock` and a `locking` CI workflow, exercising real row-lock contention against MySQL and PostgreSQL.
 
-### Changed
+**Configuration**
 
-- A lone `If-Modified-Since` does not take the pre-controller short-circuit. A date needs no prior access — a client can guess one — so an early `304` on it would confirm a record's existence and, by bisection, the second it last changed in, to a client holding nothing and cleared by nothing declared after `conditional`. Such a request runs the controller and everything after `conditional`, and its `304` is decided at the end; the response is unchanged, only the compute saving is surrendered. A date accompanied by a matching `If-None-Match` still short-circuits.
-- `If-None-Match: *` no longer takes the pre-controller short-circuit. A bare wildcard matches every validator there is, so answering it early confirmed a record to a client holding no tag and cleared by nothing declared after `conditional` — behind an authorization gate in that position, a working existence oracle. Such a request now takes the ordinary path and its `304` is decided after the controller, exactly as under `body`. A wildcard accompanied by a tag that does match still short-circuits.
-- A write route that publishes no date now refuses an `If-Unmodified-Since` with `412` rather than ignoring it. Under `v0.3` the header was unread on every route, so a plain `conditional:model` `PUT` or `PATCH` carrying one answered `200`; it is now evaluated, and a resource with no date to compare against cannot satisfy it. That covers a model with `$timestamps = false`, a null `UPDATED_AT`, a record that changed within the current second, and `last_modified => false` — none of which had to change for the answer to. A client that sends this header is asking to be refused when the server cannot vouch for the state, and proceeding would hand it a guard that silently does nothing, but the status code an existing client sees does change. Give the model a date, or take `conditional` off the write route.
-- Streamed, binary, and oversized responses now carry a validator when the strategy has already derived one from the request rather than from the body.
-- A `HEAD` request is no longer presented to the controller as a `GET` when the strategy does not need the rendered body.
-- Every model-derived `ETag` value changes: the connection's database name and table prefix are now part of the fingerprint, so the same key and version cannot collide across the tenants of a database-per-tenant or prefix-per-tenant deployment. No released version emitted a model-derived tag, so no released baseline is invalidated, but a dev checkout tracking `main` will see every one of its tags change at once and miss on the first request after upgrading.
-- A misconfigured `hash` value now fails on every eligible request rather than only on those that reached the tagging step. The strategy is constructed before `$next()` so the short-circuit can consult it, and `BodyHashStrategy` validates the algorithm in its constructor — so a request that ends in a `404`, a stream, or an oversized body now surfaces the same misconfiguration those requests used to pass over. Failing fast is the better behaviour, but it is a behaviour change.
-- Unsafe methods take the write path instead of falling through untouched. The `methods` config key governs read-path eligibility only; the write path applies to every unsafe method.
-- An unsafe method listed in `methods` no longer receives a validator. The write branch sits ahead of read-path eligibility, so an operator who added `POST` to that key under `v0.1` or `v0.2` to get an `ETag` on a `POST` response silently stops getting one. Nothing else about those responses changes.
-- A blank `If-Match` is refused with `412` rather than treated as absent. The realistic shape is a client templating `If-Match: ${etag}` with an empty variable: the header is present and carries zero valid members, so collapsing it to "absent" let the write through unguarded on a route without `required` and clobbered the record. `If-Match: ,` was already `412` and is the same state.
-- `If-Match: W/*` is refused with `412` rather than treated as the wildcard. The weakness prefix is no longer stripped before the wildcard test on this header: `*` is a grammar alternative to the tag list rather than an entity tag, so `W/*` is malformed, and §13.1.1's strong comparison makes fail-closed the right reading — which is what the README already promised for any `W/`-prefixed token. `If-None-Match: W/*` still is the wildcard, matching Symfony, because on the create guard and on the read path's `304` comparison that is the fail-closed reading.
-- A write route binding more than one record that implements `ProvidesConditionalValidator` now throws a `LogicException` naming the route and the candidate parameters, instead of guarding the first one. On `PATCH /articles/{article}/comments/{comment}` the guard tracked the article while the controller wrote the comment, so protection was exactly inverted: the client sending the tag of the record it was modifying got `412`, and the write applied only when it sent the tag of a record it was not touching. The read path's documented first-wins rule is untouched — only the write path asks which record it is protecting.
-- `If-None-Match: *` now fails **closed**. The create guard used to read a null validator as "the resource is absent", which is one of three states a null collapses — absent, present but yielding no validator, and nothing routed yet — so a `PUT` with `If-None-Match: *` silently overwrote a live record whose version columns were empty, and did the same on any route where the guard ran before `SubstituteBindings`. That made the README's claim that a misordered guard "stops writes" false: it converted the route into one where the create guard overwrote. The write path now asks the strategy whether the target exists, separately from asking for its version, and writes only on a definite *no*. `If-Match: *` is unchanged — it was already fail-closed.
-- **`RequestValidatorStrategy` gains a required `targetExists(Request $request): ?bool` method.** A custom strategy implementing that contract must add it: return `true` when the addressed resource is there, `false` when it definitely is not, and `null` when it cannot tell. It has no default — a default that guessed would be the fail-open behaviour above, and one that guessed the other way would refuse every legitimate create. `null` fails the create guard closed. The read path never calls it. Nothing is tagged yet and `ModelStrategy` is the only implementer in the package, so no released API is broken.
-- The weak-validator `LogicException` is no longer gated on the `required` flag. It is now raised whenever an `If-Match` would be evaluated against a weak current validator, and still on any guarded request to a `required` route. `weak => true` does not merely disable the guard on a route without the flag, it inverts it: every client sending the correct strong token was refused with `412` while every client sending nothing wrote freely, and nothing in either response said why. **A `conditional:model` write route running under `weak => true` now throws where it previously answered `412`.** A write carrying no precondition on such a route still passes, and `If-None-Match` — compared weakly under §13.1.2 — is unaffected.
-- A write carrying a precondition the route's strategy cannot evaluate is refused with `412` instead of passing through untouched. `body` is the default strategy and describes a response that does not exist yet, so a route carrying plain `conditional` had no write guard at all — and a client sending a correct `If-Match` got a `200` with no signal that its optimistic-concurrency check had been discarded. **A plain `conditional` write route whose clients send `If-Match` now returns `412` where it previously ignored the header.** A write carrying no precondition still passes through untouched, so the guard remains opt-in; name `conditional:model` or `conditional:required` to guard those writes properly. The refusal is made only where the route is resolved — **route** and **group** placement — because only there is the strategy named here the one that will actually be asked. A **kernel-global** instance runs ahead of the router, cannot see the route's flags, and defers to the route rather than refusing on its behalf; registering `conditional` globally for read-path `ETag`s therefore leaves the `conditional:required` and `conditional:model` guards on the routes underneath it working.
-- A concrete `If-None-Match` no longer satisfies the `required` flag. `required` is now satisfied only by an `If-Match`, whatever it names, or by `If-None-Match: *`; a concrete `If-None-Match` on a guarded route is answered `428` whatever it names, including a tag that matches — which was `412`. Without this the flag was defeated by one header: the stale tag `If-Match` correctly refuses applied the write verbatim once moved to `If-None-Match`, as did `"0"`, `garbage`, `W/`, and every other value a client could type, on `POST`, `PUT`, `PATCH`, and `DELETE` alike, and on the create guard too. The comparison semantics are untouched — on a route without `required`, RFC 9110 §13.2.2 still has a non-matching `If-None-Match` proceed.
-- `Validator` now rejects an entity tag containing a comma, throwing `InvalidArgumentException` from its constructor alongside the existing empty, double-quote, and control-character rejections. A comma is legal `etagc` but splits the tag across two members of an `If-Match` list, neither of which can ever match — a permanent `412` on that resource. The package's own strategies emit hex and cannot reach it; a custom `ValidatorStrategy` handing a raw column value straight to `Validator` can, and now fails loudly instead of emitting an unusable tag.
-- Model-derived responses now carry a `Last-Modified` header alongside their `ETag`. Their `Cache-Control` is unchanged: Symfony would otherwise recompute an unset policy from `no-cache, private` to `private, must-revalidate`, which permits heuristic freshness, and the middleware puts it back.
-- A client sending only `If-Unmodified-Since` to a `required` route is now honoured instead of answered `428`.
-- A write carrying an `If-Unmodified-Since` the route's strategy cannot evaluate is refused with `412`, on the same rule that already covers `If-Match` and `If-None-Match`. `body` describes a response that does not exist yet, so a plain `conditional` write route can evaluate no date precondition at all, and discarding one silently would leave a client believing a guard it asked for had been honoured. A field value that is not a valid HTTP-date is not a precondition (§13.1.4) and still passes through untouched.
+- Nine keys: `enabled`, `strategy`, `hash`, `weak`, `last_modified`, `max_response_bytes`, `methods`, `exclude`, and `lock_timeout`. `methods` governs the read path only; `exclude` suppresses both paths and matches route names and URI patterns alike.
+- Publishable config, translations, and an assets tag, under `laravel-conditional-requests` and its three per-resource variants.
 
-### Fixed
+**Failing loudly on a misconfiguration**
 
-- A `304` the middleware produces is now prepared, so it leaves without a `Content-Type`. Symfony's `Response::prepare()` clears PHP's `default_mimetype` for an empty response, and that is what stops the SAPI adding one; under route or group placement `Router::prepareResponse()` ran afterwards and did it, but under kernel-global placement nothing re-prepared and the `304` went out as `text/html; charset=UTF-8`. RFC 9111 §4.3.4 has a cache update its stored headers from the `304`, so a client holding an `application/json` entry had its stored content type overwritten on the first successful revalidation.
-- The `HEAD`-to-`GET` mutation no longer happens before the request has been routed. Under kernel-global placement it landed ahead of the router, which then went looking for a `GET` route: a route registered for `HEAD` alone answered `405`, and a `HEAD` to a URI carrying both a `GET` and a `HEAD` action reached the `GET` one. A `HEAD` at that position now goes untagged instead — the router empties its body before the middleware can hash it — which is the same degradation the `model` strategy already takes there, and preferable to a middleware quietly changing what a request routes to.
+- A `LogicException` naming the offending route or config key when `weak => true` would invert a write guard, when a strategy cannot produce a validator before the controller runs on a `required` route, when `lock` names a strategy that cannot identify a row or a resource that is not one, and when a write route binds more than one record implementing `ProvidesConditionalValidator`.
 
 ### Notes
 
 - `lock` is opt-in per route and changes nothing about a route that does not carry it.
-- **`conditional:...,lock` was parsed and inert in `v0.2` through `v0.4`.** The word was reserved so the flag would parse rather than be looked up as a strategy, and nothing acted on it. It acts now — and a route that carries it alongside a strategy that cannot name a row, or that resolves no lockable record, throws a `LogicException` on every request instead of quietly behaving as it did before. A route already written as `conditional:model,lock` or `conditional:required,lock` starts locking; check any route carrying the word before upgrading.
-- A controller run under `lock` is inside a transaction. A job it dispatches runs before the commit unless `afterCommit` is set, and returning an error response commits rather than rolls back.
-- SQLite has no row locks — `lockForUpdate()` compiles to nothing there — so `lock` on SQLite gets the re-read and the re-evaluation without the exclusion.
-- SQL Server locks and re-evaluates correctly but is not sent a lock timeout, so its own default of wait-forever stands whatever `lock_timeout` says.
-- A transaction already open on the connection when the middleware runs takes ownership: this one becomes a savepoint inside it, the row stays locked until the outer commit, and `lock_timeout` is not applied.
+- A controller run under `lock` is inside a transaction: a job it dispatches runs before the commit unless `afterCommit` is set, and returning an error response commits rather than rolls back.
+- SQLite has no row locks — `lockForUpdate()` compiles to nothing there — so `lock` on SQLite gets the re-read and the re-evaluation without the exclusion. SQL Server locks and re-evaluates correctly but is not sent a lock timeout, so its own default of wait-forever stands whatever `lock_timeout` says.
+- A pre-controller `304` answers before anything declared after `conditional`, including per-record authorization. That, and seventeen other things worth knowing before deploying, are in [`docs/hazards.md`](docs/hazards.md).
 
-## v0.1.0
+### Development history
 
-### Added
-
-- `conditional` route middleware attaching an `ETag` to eligible responses.
-- `304 Not Modified` short-circuiting on `If-None-Match`, including tag lists and the bare `*` wildcard.
-- Swappable validator strategies with a `body` hash default, registered through `ConditionalRequests::extend()`.
-- Configurable hash algorithm, weak validators, eligible methods, response size ceiling, and route exclusions.
-- Eligibility rules skipping streamed, binary, unsuccessful, oversized, and already-tagged responses.
-
-### Notes
-
-- The write path, the `Last-Modified` family, model-derived validators, and locking are not implemented yet.
+`v1.0.0` is the first tagged release. The package was built in five phases —
+read path, model-derived validators, write path, `Last-Modified`, locking — and
+each phase's plan, decisions, and definition of done are in
+[`docs/plans/`](docs/plans). None of those phases was ever tagged or published.
