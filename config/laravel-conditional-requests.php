@@ -82,11 +82,15 @@ return [
     | If-Modified-Since and guard a write with If-Unmodified-Since.
     |
     | Set this to false to keep the whole family out of the conversation:
-    | responses then carry no Last-Modified, an If-Modified-Since can never
-    | produce a 304, and a write offering only If-Unmodified-Since is refused
-    | with 412 rather than proceeding unguarded. A date is published only once
-    | the second holding the change has elapsed, so a record that has just
-    | changed carries its ETag alone until that second is over.
+    | responses then carry no model-derived Last-Modified, an If-Modified-Since
+    | can never produce a 304 off one, and a write offering only
+    | If-Unmodified-Since is refused with 412 rather than proceeding unguarded.
+    | This key governs the dates this package derives, not every date on the
+    | wire: a response whose Last-Modified the application set itself is left
+    | alone either way, and Symfony still compares an If-Modified-Since against
+    | it and still answers 304. A date is published only once the second holding
+    | the change has elapsed, so a record that has just changed carries its ETag
+    | alone until that second is over.
     |
     */
 

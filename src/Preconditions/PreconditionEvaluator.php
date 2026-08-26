@@ -38,10 +38,24 @@ final readonly class PreconditionEvaluator
     /**
      * Decide what should happen to an unsafe request.
      *
-     * Precedence follows §13.2.2: If-Match is evaluated first, and If-None-Match
-     * is consulted only in its absence. The `required` flag is what turns the
-     * absence of any precondition from "proceed" into 428 — without it the
-     * guard is opt-out and a client clobbers freely by omitting a header.
+     * Precedence follows §13.2.2: If-Match is evaluated first, then
+     * If-Unmodified-Since in its absence, then If-None-Match. The `required`
+     * flag is what turns the absence of any precondition from "proceed" into
+     * 428 — without it the guard is opt-out and a client clobbers freely by
+     * omitting a header.
+     *
+     * One deliberate departure, in both date-free and date-bearing form. §13.2.2
+     * has a SATISFIED step 1 or step 2 continue to the next step rather than
+     * finish; this method returns Passed. So `If-Match: <matching>` or a
+     * satisfied `If-Unmodified-Since`, sent with `If-None-Match: *` on a PUT to
+     * a record that exists, is answered 200 where a faithful reading would run
+     * the create guard and answer 412. The two headers state contradictory
+     * beliefs — "the version I hold" and "only if nothing is there" — and the
+     * shape is vanishingly rare in practice; what matters more is that both
+     * steps behave alike, which is the behaviour v0.3 already shipped for
+     * If-Match. It is recorded here rather than corrected because changing it
+     * would move a released answer, and the fail-closed direction is the one
+     * a client sending only one of the two headers already gets.
      *
      * What satisfies `required` is narrower than what this method evaluates.
      * Two field values state a version the client believes it is writing over:

@@ -297,6 +297,16 @@ final readonly class Conditional
 
         $response->setLastModified($validator->lastModified);
 
+        // Restoring with set() populates ResponseHeaderBag::$cacheControl, so a
+        // value Symfony had computed becomes an explicit one and stops being
+        // recomputed. A later downstream Expires or max-age therefore no longer
+        // triggers the recomputation it would have on an untouched response.
+        // The emitted string is byte-identical today — the restored value is
+        // exactly what computeCacheControlValue() had produced — and this is a
+        // known consequence rather than an accident: the alternative is leaving
+        // the "private, must-revalidate" that letting the recomputation stand
+        // would write, which is the one thing a revalidation package must not
+        // do (see the docblock above).
         if ($cacheControl !== null && $response->headers->get('Cache-Control') !== $cacheControl) {
             $response->headers->set('Cache-Control', $cacheControl);
         }
