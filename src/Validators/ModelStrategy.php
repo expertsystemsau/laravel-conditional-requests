@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace ExpertSystems\ConditionalRequests\Validators;
 
+use ExpertSystems\ConditionalRequests\Contracts\LockableValidatorStrategy;
 use ExpertSystems\ConditionalRequests\Contracts\ProvidesConditionalValidator;
-use ExpertSystems\ConditionalRequests\Contracts\RequestValidatorStrategy;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Route;
 use LogicException;
@@ -21,7 +23,7 @@ use Symfony\Component\HttpFoundation\Response;
  * SubstituteBindings issues the binding query before Conditional ever runs,
  * so a short-circuited 304 still costs that one query.
  */
-final readonly class ModelStrategy implements RequestValidatorStrategy
+final readonly class ModelStrategy implements LockableValidatorStrategy
 {
     /**
      * @param  bool  $weak  emit weak tags, per the `weak` config key
@@ -51,6 +53,75 @@ final readonly class ModelStrategy implements RequestValidatorStrategy
     public function fromResponse(Request $request, Response $response): ?Validator
     {
         return $this->fromRequest($request);
+    }
+
+    /**
+     * The bound record, when it is one `lock` mode can serialise on.
+     *
+     * A ProvidesConditionalValidator that is not an Eloquent model can still
+     * describe its own version perfectly well — it simply has no row to lock.
+     * Returning null here is what lets the middleware tell that apart from a
+     * create, using the validator it already has in hand.
+     */
+    public function lockTarget(Request $request): ?Model
+    {
+        $target = $this->target($request);
+
+        return $target instanceof Model ? $target : null;
+    }
+
+    /**
+     * The locking read itself.
+     *
+     * Public because it is the single source of truth for the SQL: sqlite's
+     * grammar compiles a lock to the empty string, so the only honest way to
+     * assert that a FOR UPDATE is actually asked for is to compile this exact
+     * query against a grammar that emits one. Also a real extension point —
+     * override to take a shared lock, add a scope, or eager-load.
+     *
+     * newQuery() rather than newQueryWithoutScopes(): the locked read should
+     * see the record the way the rest of the application sees it, so a record
+     * soft-deleted since it was bound re-reads as null and the precondition
+     * fails closed.
+     *
+     * @return Builder<Model>
+     */
+    public function lockingQuery(Model $target): Builder
+    {
+        return $target->newQuery()
+            ->whereKey($target->getKey())
+            ->lockForUpdate();
+    }
+
+    /**
+     * Re-read the target under the lock and put the fresh instance where
+     * fromRequest() — and the controller — will find it.
+     *
+     * The route parameter is matched by identity rather than by name, so the
+     * same first-match rule target() applies is not spelled out twice and
+     * cannot drift between the two.
+     */
+    public function lockAndRefresh(Request $request, Model $target): ?Model
+    {
+        $fresh = $this->lockingQuery($target)->first();
+
+        $route = $request->route();
+
+        if (! $route instanceof Route || ! $route->hasParameters()) {
+            return $fresh;
+        }
+
+        foreach ($route->parameters() as $name => $parameter) {
+            if ($parameter !== $target) {
+                continue;
+            }
+
+            $fresh instanceof Model
+                ? $route->setParameter($name, $fresh)
+                : $route->forgetParameter($name);
+        }
+
+        return $fresh;
     }
 
     /**
