@@ -17,6 +17,7 @@ use Illuminate\Contracts\Config\Repository;
 use Illuminate\Contracts\Translation\Translator;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response as IlluminateResponse;
+use LogicException;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpFoundation\StreamedResponse;
@@ -151,9 +152,22 @@ final readonly class Conditional
             return $next($request);
         }
 
-        $strategy = $this->registry->strategy($this->strategyName($flags));
+        $name = $this->strategyName($flags);
+        $strategy = $this->registry->strategy($name);
 
         if (! $strategy instanceof RequestValidatorStrategy) {
+            if ($flags->required) {
+                throw new LogicException(sprintf(
+                    '[%s] is guarded by the conditional `required` flag, but the [%s] validator strategy '
+                    .'cannot produce a validator before the controller runs, so every guarded write would '
+                    .'be refused with 412. Drop the explicit strategy flag — `required` already implies '
+                    .'`model` — or name a strategy implementing %s.',
+                    $this->label($request),
+                    $name,
+                    RequestValidatorStrategy::class,
+                ));
+            }
+
             // A body hash describes a response that does not exist yet, so
             // there is nothing to compare and nothing this path can guard. The
             // request passes through unchanged rather than failing every
@@ -162,6 +176,17 @@ final readonly class Conditional
         }
 
         $current = $strategy->fromRequest($request);
+
+        if ($flags->required && $current instanceof Validator && $current->weak) {
+            throw new LogicException(sprintf(
+                '[%s] is guarded by the conditional `required` flag, but the [%s] strategy produced a weak '
+                .'validator. RFC 9110 §13.1.1 requires strong comparison for If-Match, so a weak validator '
+                .'can never satisfy one and every guarded write would be refused with 412. Set '
+                .'[laravel-conditional-requests.weak] to false, or drop the `required` flag from this route.',
+                $this->label($request),
+                $name,
+            ));
+        }
 
         return match ($this->evaluator->evaluate($request, $current, $flags->required)) {
             PreconditionOutcome::Failed => throw new PreconditionFailedException(
@@ -430,6 +455,14 @@ final readonly class Conditional
     private function enabled(): bool
     {
         return (bool) $this->config->get('laravel-conditional-requests.enabled');
+    }
+
+    /**
+     * A short identifier for the request, for a configuration error message.
+     */
+    private function label(Request $request): string
+    {
+        return $request->getMethod().' '.$request->getPathInfo();
     }
 
     /**
