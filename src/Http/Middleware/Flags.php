@@ -8,11 +8,11 @@ namespace ExpertSystems\ConditionalRequests\Http\Middleware;
  * The parsed middleware parameter list.
  *
  * Design §5.2 makes flags order-independent and reserves words that name
- * behaviour rather than a strategy. `required` (v0.3) is implemented; `lock`
- * (v0.5) is still reserved here ahead of the release that implements it, so
- * that `conditional:lock` parses today instead of asking the registry for a
- * strategy of that name and throwing. Adding a reserved word later means
- * extending the chain in parse() and adding a flag to this object.
+ * behaviour rather than a strategy. `required` (v0.3) and `lock` (v0.5) are
+ * both implemented, and both are recognised here rather than passed on to the
+ * strategy registry, which would go looking for a strategy of that name and
+ * throw. Adding a reserved word later means extending the chain in parse() and
+ * adding a flag to this object.
  */
 final readonly class Flags
 {
