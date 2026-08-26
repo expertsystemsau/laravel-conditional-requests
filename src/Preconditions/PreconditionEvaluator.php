@@ -110,8 +110,21 @@ final readonly class PreconditionEvaluator
      */
     public function supplied(Request $request): bool
     {
-        return $this->sentHeader($request, 'If-Match') !== null
+        return $this->sentIfMatch($request)
             || $this->header($request, 'If-None-Match') !== null;
+    }
+
+    /**
+     * Whether the client sent an If-Match at all.
+     *
+     * The write path asks so it can raise a configuration error before
+     * comparing an If-Match against a validator that cannot satisfy one. Blank
+     * counts, exactly as it does in evaluate(): the header is present, and the
+     * comparison it is about to lose is the one §13.1.1 governs either way.
+     */
+    public function sentIfMatch(Request $request): bool
+    {
+        return $this->sentHeader($request, 'If-Match') !== null;
     }
 
     /**

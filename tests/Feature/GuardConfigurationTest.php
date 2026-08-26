@@ -78,10 +78,15 @@ it('leaves a route without required alone when its validators are weak', functio
     $this->put('/articles/1')->assertOk();
 });
 
-it('still refuses a weak validators If-Match, current tag and all', function (): void {
-    // Not an error, because the route never asked for the guard — but it is
-    // still 412, because §13.1.1 says a weak validator cannot satisfy If-Match.
-    // This is the failure the required error exists to explain in advance.
+it('refuses to evaluate an If-Match against weak validators without required too', function (): void {
+    // Amended with the v0.3 write-path sweep. This previously asserted 412 and
+    // called it "not an error, because the route never asked for the guard".
+    // It is an error: weakness inverts the guard on this route just as surely
+    // as on a `required` one. Every client sending the correct token — strong
+    // or weak-prefixed — was refused with 412, and every client sending
+    // nothing wrote freely, with nothing in either response to say why.
+    $this->withoutExceptionHandling();
+
     config()->set('laravel-conditional-requests.weak', true);
 
     writeRoute('conditional:model');
@@ -90,7 +95,29 @@ it('still refuses a weak validators If-Match, current tag and all', function ():
 
     expect($etag)->toStartWith('W/"');
 
-    $this->put('/articles/1', [], ['If-Match' => $etag])->assertStatus(412);
+    expect(fn () => $this->put('/articles/1', [], ['If-Match' => substr($etag, 2)]))
+        ->toThrow(LogicException::class, '[laravel-conditional-requests.weak]');
+});
+
+it('raises the weak validator error for a weak prefixed If-Match too', function (): void {
+    $this->withoutExceptionHandling();
+
+    config()->set('laravel-conditional-requests.weak', true);
+
+    writeRoute('conditional:model');
+
+    $this->put('/articles/1', [], ['If-Match' => 'W/"anything"']);
+})->throws(LogicException::class, '[laravel-conditional-requests.weak]');
+
+it('leaves a weak validators create guard alone', function (): void {
+    // The error fires where the misconfiguration matters and nowhere else.
+    // If-None-Match is compared weakly under §13.1.2, so a weak validator
+    // satisfies it perfectly well and the create guard is not inverted.
+    config()->set('laravel-conditional-requests.weak', true);
+
+    writeRoute('conditional:model');
+
+    $this->put('/articles/1', [], ['If-None-Match' => '*'])->assertStatus(412);
 });
 
 it('guards a route whose custom strategy can answer before the controller', function (): void {

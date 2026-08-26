@@ -190,12 +190,22 @@ final readonly class Conditional
 
         $current = $strategy->fromRequest($request);
 
-        if ($flags->required && $current instanceof Validator && $current->weak) {
+        // Not gated on `required`. Weakness inverts the guard wherever an
+        // If-Match reaches it: §13.1.1 requires strong comparison, so every
+        // client sending the correct token is refused with 412 while every
+        // client sending nothing writes freely — the exact opposite of what the
+        // route was asked to do, with nothing in either response to say why.
+        // The `required` flag is the second trigger rather than the only one,
+        // because there the misconfiguration is fatal before a client sends
+        // anything at all. A write carrying no precondition on a route without
+        // the flag is guarded by nothing and still passes.
+        if ($current instanceof Validator && $current->weak && ($flags->required || $this->evaluator->sentIfMatch($request))) {
             throw new LogicException(sprintf(
-                '[%s] is guarded by the conditional `required` flag, but the [%s] strategy produced a weak '
-                .'validator. RFC 9110 §13.1.1 requires strong comparison for If-Match, so a weak validator '
-                .'can never satisfy one and every guarded write would be refused with 412. Set '
-                .'[laravel-conditional-requests.weak] to false, or drop the `required` flag from this route.',
+                '[%s] is guarded against a weak validator produced by the [%s] strategy. RFC 9110 §13.1.1 '
+                .'requires strong comparison for If-Match, so a weak validator can never satisfy one: every '
+                .'write naming the current version is refused with 412, and every write naming nothing is '
+                .'applied unguarded. Set [laravel-conditional-requests.weak] to false, or take the conditional '
+                .'middleware off this write route.',
                 $this->label($request),
                 $name,
             ));
