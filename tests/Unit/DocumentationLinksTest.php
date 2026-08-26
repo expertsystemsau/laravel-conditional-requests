@@ -3,9 +3,10 @@
 declare(strict_types=1);
 
 /**
- * Eight documentation pages cross-link each other, and the hazard register is
- * linked by anchor from a dozen places. A broken `#h7` is invisible in review
- * and permanent once merged, so it is checked here rather than by eye.
+ * Eight documentation pages and the `.github/*.md` files cross-link each
+ * other, and the hazard register is linked by anchor from a dozen places. A
+ * broken `#h7` is invisible in review and permanent once merged, so it is
+ * checked here rather than by eye.
  */
 it('has no broken internal documentation links', function (): void {
     expect(brokenLinks())->toBe([]);
@@ -29,9 +30,11 @@ function documentationFiles(): array
     /** @var list<string> $files */
     $files = [$root.'/README.md', $root.'/CHANGELOG.md'];
 
-    foreach ((array) glob($root.'/docs/*.md') as $file) {
-        if (is_string($file)) {
-            $files[] = $file;
+    foreach ([$root.'/docs/*.md', $root.'/.github/*.md'] as $pattern) {
+        foreach ((array) glob($pattern) as $file) {
+            if (is_string($file)) {
+                $files[] = $file;
+            }
         }
     }
 

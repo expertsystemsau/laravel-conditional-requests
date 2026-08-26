@@ -3,6 +3,9 @@
 declare(strict_types=1);
 
 use ExpertSystems\ConditionalRequests\ConditionalRequests;
+use ExpertSystems\ConditionalRequests\Contracts\LockableValidatorStrategy;
+use ExpertSystems\ConditionalRequests\Contracts\RequestValidatorStrategy;
+use ExpertSystems\ConditionalRequests\Contracts\ValidatorStrategy;
 use ExpertSystems\ConditionalRequests\Http\Middleware\Conditional;
 use ExpertSystems\ConditionalRequests\Tests\Fixtures\Article;
 use ExpertSystems\ConditionalRequests\Validators\BodyHashStrategy;
@@ -105,6 +108,12 @@ it('freezes the publish tags', function (): void {
 it('freezes the translation keys', function (): void {
     expect(array_keys(require __DIR__.'/../../lang/en/messages.php'))
         ->toBe(['precondition_failed', 'precondition_required', 'lock_timeout']);
+});
+
+it('freezes the strategy contract inheritance chain', function (): void {
+    expect(is_subclass_of(RequestValidatorStrategy::class, ValidatorStrategy::class))->toBeTrue()
+        ->and(is_subclass_of(LockableValidatorStrategy::class, RequestValidatorStrategy::class))->toBeTrue()
+        ->and(is_subclass_of(LockableValidatorStrategy::class, ValidatorStrategy::class))->toBeTrue();
 });
 
 /**

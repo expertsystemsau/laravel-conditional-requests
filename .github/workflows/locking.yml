@@ -93,6 +93,11 @@ jobs:
             exit 1
           fi
 
+          if ! grep -q '5 passed' lock.log; then
+            echo "Expected the 5 RowLockContentionTest cases to pass, but did not see that — the filter may have matched nothing."
+            exit 1
+          fi
+
   pgsql:
     runs-on: ubuntu-latest
 
@@ -146,5 +151,10 @@ jobs:
           composer test:lock 2>&1 | tee lock.log
           if grep -qi 'skipped' lock.log; then
             echo "The contention suite skipped — the gate did not see its environment."
+            exit 1
+          fi
+
+          if ! grep -q '5 passed' lock.log; then
+            echo "Expected the 5 RowLockContentionTest cases to pass, but did not see that — the filter may have matched nothing."
             exit 1
           fi
