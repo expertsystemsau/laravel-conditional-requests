@@ -117,10 +117,12 @@ final readonly class PreconditionEvaluator
     /**
      * Whether the client supplied a precondition this class would evaluate.
      *
-     * The two field values are read exactly as evaluate() reads them, so the
+     * The three field values are read exactly as evaluate() reads them, so the
      * answer cannot drift from what evaluation would have done with them: an
-     * If-Match counts the moment the header is present, blank included, and an
-     * If-None-Match counts only when it names something.
+     * If-Match counts the moment the header is present, blank included; an
+     * If-None-Match counts only when it names something; and an
+     * If-Unmodified-Since counts only when its value is a valid HTTP-date,
+     * because §13.1.4 has anything else ignored rather than refused.
      *
      * The write path asks this when it has established that it cannot evaluate
      * a precondition at all — no strategy can produce the current validator
@@ -129,7 +131,10 @@ final readonly class PreconditionEvaluator
      */
     public function supplied(Request $request): bool
     {
+        $ifUnmodifiedSince = $this->header($request, 'If-Unmodified-Since');
+
         return $this->sentIfMatch($request)
+            || ($ifUnmodifiedSince !== null && $this->httpDate($ifUnmodifiedSince) !== null)
             || $this->header($request, 'If-None-Match') !== null;
     }
 

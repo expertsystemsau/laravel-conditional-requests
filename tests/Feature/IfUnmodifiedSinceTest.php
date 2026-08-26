@@ -170,3 +170,37 @@ it('prefers If-Match over If-Unmodified-Since', function (): void {
         'If-Unmodified-Since' => 'Wed, 26 Aug 2026 12:00:03 GMT',
     ])->assertStatus(412);
 });
+
+it('refuses a date precondition a strategy cannot evaluate rather than discarding it', function (): void {
+    // The v0.3 rule, extended to the header v0.4 added. `body` cannot produce a
+    // validator before the controller runs, so it cannot evaluate this
+    // precondition at all — and discarding it silently is the exact failure
+    // that rule exists to prevent: the route looks guarded, answers 200, and
+    // the client believes its check was honoured.
+    $runs = 0;
+
+    Route::middleware([SubstituteBindings::class, 'conditional'])
+        ->patch('/readings/{reading}', function (Reading $reading) use (&$runs): array {
+            $runs++;
+            $reading->update(['label' => 'Clobbered']);
+
+            return ['label' => $reading->label];
+        });
+
+    $this->patch('/readings/1', [], ['If-Unmodified-Since' => 'Wed, 26 Aug 2026 12:00:03 GMT'])->assertStatus(412);
+
+    expect($runs)->toBe(0)
+        ->and(Reading::query()->findOrFail(1)->label)->toBe('Hello');
+});
+
+it('lets an unevaluable route through when the date is not a date at all', function (): void {
+    // §13.1.4 ignores a field value that is not a valid HTTP-date, so there is
+    // no precondition to refuse and the guard stays opt-in — read exactly as
+    // evaluate() reads it, so the two cannot disagree.
+    Route::middleware([SubstituteBindings::class, 'conditional:body'])
+        ->put('/readings/{reading}', fn (Reading $reading): array => ['label' => $reading->label]);
+
+    $this->put('/readings/1', [], ['If-Unmodified-Since' => 'not a date'])->assertOk();
+    $this->put('/readings/1', [], ['If-Unmodified-Since' => '   '])->assertOk();
+    $this->put('/readings/1')->assertOk();
+});
