@@ -138,7 +138,7 @@ The same file asserts the other half: every class that contributes nothing to th
 
 `tests/ArchTest.php` asserts that every class in the package is `final` and that everything in `Contracts` is an interface — the two structural properties the rest of the freeze assumes.
 
-Three further examples in `PublicApiTest.php` freeze what reflection cannot see: the nine configuration keys in file order, the middleware alias with the two built-in strategy names, and the three translation keys.
+Four further examples in `PublicApiTest.php` freeze what reflection of `src/` cannot see: the nine configuration keys in file order, the middleware alias with the two built-in strategy names, the four publish tags, and the three translation keys.
 
 Changing the frozen list is not difficult. It is *deliberate* — which is the whole point. A contributor who has to edit that list has been told, at the moment they broke the contract, that they broke it.
 
