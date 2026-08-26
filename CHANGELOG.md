@@ -27,6 +27,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - `conditionalLastModifiedColumn()` on `HasConditionalValidator`, for a model whose modification date lives somewhere other than `updated_at`.
 - `last_modified` config key, defaulting to `true`, turning the whole family off in one line.
 
+- `lock` middleware flag: a transaction on the target record's own connection, a `SELECT … FOR UPDATE` re-read, and **the precondition evaluated a second time inside the lock** — which is what closes the check-then-write race `If-Match` alone leaves open.
+- `LockableValidatorStrategy` contract, implemented by the `model` strategy, naming the row a guarded write is about to change.
+- `lock_timeout` configuration key, applied per request on PostgreSQL and MySQL / MariaDB, answering an expired wait with `503 Service Unavailable` and a `Retry-After` rather than an opaque `500`.
+- `LockTimeoutException`, catchable as Symfony's `ServiceUnavailableHttpException`.
+- A `LogicException` naming the route when `lock` is applied to a strategy that cannot name a row, or to a resource that is not one.
+- `composer test:lock` and a `locking` CI workflow, exercising real row-lock contention against MySQL and PostgreSQL.
+
 ### Changed
 
 - A lone `If-Modified-Since` does not take the pre-controller short-circuit. A date needs no prior access — a client can guess one — so an early `304` on it would confirm a record's existence and, by bisection, the second it last changed in, to a client holding nothing and cleared by nothing declared after `conditional`. Such a request runs the controller and everything after `conditional`, and its `304` is decided at the end; the response is unchanged, only the compute saving is surrendered. A date accompanied by a matching `If-None-Match` still short-circuits.
@@ -55,6 +62,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - A `304` the middleware produces is now prepared, so it leaves without a `Content-Type`. Symfony's `Response::prepare()` clears PHP's `default_mimetype` for an empty response, and that is what stops the SAPI adding one; under route or group placement `Router::prepareResponse()` ran afterwards and did it, but under kernel-global placement nothing re-prepared and the `304` went out as `text/html; charset=UTF-8`. RFC 9111 §4.3.4 has a cache update its stored headers from the `304`, so a client holding an `application/json` entry had its stored content type overwritten on the first successful revalidation.
 - The `HEAD`-to-`GET` mutation no longer happens before the request has been routed. Under kernel-global placement it landed ahead of the router, which then went looking for a `GET` route: a route registered for `HEAD` alone answered `405`, and a `HEAD` to a URI carrying both a `GET` and a `HEAD` action reached the `GET` one. A `HEAD` at that position now goes untagged instead — the router empties its body before the middleware can hash it — which is the same degradation the `model` strategy already takes there, and preferable to a middleware quietly changing what a request routes to.
+
+### Notes
+
+- `lock` is opt-in per route and changes nothing about a route that does not carry it.
+- A controller run under `lock` is inside a transaction. A job it dispatches runs before the commit unless `afterCommit` is set, and returning an error response commits rather than rolls back.
+- SQLite has no row locks — `lockForUpdate()` compiles to nothing there — so `lock` on SQLite gets the re-read and the re-evaluation without the exclusion.
 
 ## v0.1.0
 

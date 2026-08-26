@@ -180,7 +180,8 @@ Precedence follows RFC 9110 §13.2.2: `If-Match` is evaluated first; `If-Unmodif
 - **Nested transactions.** If the controller opens its own transaction, Laravel savepoints it. Acceptable, but must be covered by a test.
 - **Queued jobs.** A job dispatched inside the controller runs before commit unless `afterCommit` is set. Documented as a caveat; not something the package can fix.
 - **Long transactions.** A slow controller now holds a row lock for its duration. Documented, with a recommendation to keep guarded routes lean.
-- **Non-database resources.** `lock` is meaningless without a lockable row. Throw at boot if the strategy cannot supply one.
+- **Non-database resources.** `lock` is meaningless without a lockable row. Throws on the first guarded request the route serves — not at boot. Whether a strategy can supply a row is not a property of a route: the registry constructs strategies per call so Octane cannot split-brain them, and whether *this* request's resource is a row is only knowable once the request has been routed. A boot-time scan would also miss controller-declared middleware, which `Router::gatherRouteMiddleware()` merges in only at dispatch. This matches the point at which v0.3 raises the analogous weak-validator error, for the same reasons.
+- **An error response is not a rollback.** `Connection::transaction()` inspects control flow, not status codes, so a controller that returns a `500` has its work committed. Documented; matching a hand-written `DB::transaction()` matters more than a status-code rule nobody would expect.
 
 ## 6. Configuration
 
@@ -194,13 +195,19 @@ return [
     'max_response_bytes' => 1_048_576,  // 0 or negative means unlimited
     'methods' => ['GET', 'HEAD'],    // read path eligibility
     'exclude' => [],                 // route names or URI patterns
-    'lock' => ['enabled' => false, 'timeout' => 5],
+    'lock_timeout' => 5,             // seconds; 0 leaves the server's own setting alone
 ];
 ```
 
 `xxh128` over `sha256`: this is a change-detection fingerprint, not a security primitive, and xxh128 is substantially faster on large payloads. Collision risk from *incidental* change is irrelevant at this scale.
 
 The threat model is worth stating, because it is the one case where the default is wrong: xxh128 offers no collision resistance against a **chosen** input. If response bodies carry attacker-influenced content and serving a stale representation matters, a crafted body can be made to collide with an earlier one and suppress the client's refresh. Those deployments should set `hash` to a cryptographic algorithm.
+
+`lock_timeout` is flat rather than nested under a `lock` array, and there is no `lock.enabled`. Both changes are forced by the same two facts.
+
+`mergeConfigFrom()` is a shallow top-level `array_merge`, so a nested `lock` key published by an application before a sub-key existed would read that sub-key as `null` rather than as the package default — a defect that appears only after an upgrade, only in someone else's application. Flat keys are merged individually and do pick the default up.
+
+`lock.enabled` was dropped because it duplicates the per-route flag with no extra capability — `lock` is already opt-in and already defaults off — while adding a switch whose effect is to silently downgrade a correct route to a racy one. The existing `enabled` master switch remains the operator's escape hatch, and it has the virtue of being total and obvious rather than quiet and partial.
 
 ## 7. Edge cases to cover
 
@@ -232,7 +239,7 @@ Pest 4/5 with Orchestra Testbench, exercising real routes registered in `workben
 - **Read path:** 200-then-304 cycles for `If-None-Match` and `If-Modified-Since`, precedence when both are sent, `*`, weak/strong comparison, 304 body and header stripping.
 - **Write path:** matching / stale / absent / `*` `If-Match`; 412 and 428 status and body shape; `If-Unmodified-Since` fallback and precedence.
 - **Short-circuit:** assert via a controller-invocation spy that the controller does **not** run on a model-derived 304.
-- **Locking:** concurrent-write simulation proving the unlocked mode can lose an update and the locked mode cannot. This is the test that justifies the feature.
+- **Locking:** two separate proofs, because `lock` makes two separate promises. *Re-evaluation* — that a row changed after the guard read it is caught under the lock and not without it — is proved on the default harness, on a file-backed SQLite database with two independent connections, one of which commits a real competing write. *Mutual exclusion* — that a competing session cannot take the row at all — **cannot be proved on SQLite at any effort**, because `SQLiteGrammar::compileLock()` returns the empty string and SQLite has no row locks. It is proved instead against MySQL and PostgreSQL in a gated suite (`composer test:lock`) with its own CI job, using two connections in one process: one holds the lock, the other is the guarded request, and the assertion is the `503`. Two *processes* are not required — two sessions are, and a driver that has row locks is.
 - **Skips:** streamed, binary, oversized, pre-tagged, and error responses.
 - **Boot-time errors:** `required` with a weak strategy; `lock` without a lockable resource.
 - Type coverage held at 100% per the existing `composer test:types` gate.
@@ -252,7 +259,7 @@ Scope is unchanged; only the sequence moved.
 | `v0.2` | Model-derived validators, `fromRequest()`, pre-controller short-circuit — **shipped** |
 | `v0.3` | Write path, `If-Match` → 412, `required` → 428, `If-None-Match: *` create guard — **shipped** |
 | `v0.4` | `Last-Modified` / `If-Modified-Since` / `If-Unmodified-Since` — **shipped** |
-| `v0.5` | `lock` mode with in-transaction re-evaluation |
+| `v0.5` | `lock` mode with in-transaction re-evaluation — **shipped** |
 | `v1.0` | Documentation, `werk365/etagconditionals` migration guide, API freeze |
 
 ## 10. Non-goals

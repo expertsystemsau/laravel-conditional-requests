@@ -24,7 +24,7 @@ Most Laravel packages in this space only do the first half, and only via ETag. T
 ## Status
 
 > [!WARNING]
-> **Pre-release — under active development.** The read path, the write path, and all four conditional headers described below ship and are tested — model-derived validators, the pre-controller `304` short-circuit, `ETag`, and `Last-Modified` included. `lock` mode is not implemented yet; it is marked on the [roadmap](#roadmap) below. Nothing is stable until `v1.0.0`.
+> **Pre-release — under active development.** The read path, the write path, and all four conditional headers described below ship and are tested — model-derived validators, the pre-controller `304` short-circuit, `ETag`, and `Last-Modified` included. Opt-in [`lock` mode](#closing-the-race--lock) ships too, re-evaluating the precondition inside a transaction holding a row lock. Nothing is stable until `v1.0.0`.
 
 ## Requirements
 
@@ -460,6 +460,51 @@ It satisfies `required`, so a client that sends it is not answered `428`.
 
 `If-Modified-Since` is a read-path header and is ignored on a write (§13.1.3), so it neither guards a write nor satisfies `required`.
 
+### Closing the race — `lock`
+
+`If-Match` on its own is check-then-write. The middleware reads the current version, decides the write is safe, and calls your controller — and in between those two things another request can commit. The window is small and it is real: under concurrency a `conditional:required` route loses fewer updates than an unguarded one, not none.
+
+`lock` closes it.
+
+```php
+Route::patch('/articles/{article}', UpdateArticle::class)
+    ->middleware('conditional:required,lock');
+```
+
+The middleware then opens a transaction on the record's own connection, re-reads the record with `SELECT … FOR UPDATE`, **evaluates `If-Match` a second time against what came back**, and only then runs your controller — inside the same transaction, still holding the lock. From the lock until the commit nothing else can change that row, so the version your controller writes on top of is the version it was promised.
+
+The second evaluation is the point. A lock without it would be the same race with more machinery.
+
+Your controller is handed the freshly locked instance, not the one route-model binding resolved, so `$article->version` is what the lock read.
+
+#### What it costs
+
+`lock` is off unless you ask for it, per route, and this is why:
+
+- **Your controller runs inside a transaction.** Everything it does is in the same unit of work. If it opens its own transaction, Laravel savepoints it and that works fine.
+- **A job dispatched inside your controller runs before the commit.** This is Laravel's ordinary behaviour inside any transaction and this package cannot change it. Use `dispatch($job)->afterCommit()`, or set `after_commit => true` on the queue connection.
+- **The row stays locked for as long as your controller takes.** Keep guarded routes lean. A slow guarded route is a queue of waiting writers.
+- **A response is not a rollback.** Returning a `500` from your controller commits the transaction, exactly as it would inside a hand-written `DB::transaction()`. Throw if you want the work discarded.
+- **Only the target row is locked, on only that record's connection.** Related rows your controller writes, and writes it makes through a different connection, are outside both.
+- **A `503` means the row was busy.** If the lock cannot be taken within `lock_timeout` seconds the request is answered `503 Service Unavailable` with a `Retry-After`, and nothing is written. Catch `ExpertSystems\ConditionalRequests\Exceptions\LockTimeoutException` in your handler to answer differently.
+
+#### `lock_timeout`
+
+```php
+'lock_timeout' => 5,
+```
+
+Seconds to wait for the row before giving up with `503`. Applied per request on PostgreSQL (`SET LOCAL lock_timeout`, transaction-scoped) and on MySQL / MariaDB (`SET SESSION innodb_lock_wait_timeout`, restored afterwards). Other drivers have no equivalent and ignore it.
+
+Set `0` to leave your server's own setting alone — but note that PostgreSQL's `lock_timeout` defaults to `0`, which means wait forever.
+
+#### Creates
+
+`lock` has nothing to hold on a create: there is no row yet. A `POST` to a collection under `conditional:required,lock` behaves exactly as it does under `conditional:required` — `If-None-Match: *` guards it and no transaction is opened. Back that up with a unique constraint; a package cannot.
+
+> [!WARNING]
+> `lock` needs a database that implements row locking. On MySQL, MariaDB, PostgreSQL, and SQL Server it does what it says. **On SQLite it does not**: `lockForUpdate()` compiles to nothing there, so the re-read and the re-evaluation still happen and still catch a committed competitor, but there is no lock and the window between the re-read and the write is left open.
+
 ### Requirements and caveats for guarded routes
 
 > [!WARNING]
@@ -490,7 +535,7 @@ It satisfies `required`, so a client that sends it is not answered `428`.
 > The preconditions are evaluated in RFC 9110 §13.2.2 order: `If-Match` first, then `If-Unmodified-Since` in its absence, then `If-None-Match`. A request carrying only `If-Unmodified-Since` therefore satisfies `required` — see [If-Unmodified-Since](#if-unmodified-since) for what it can and cannot promise.
 
 > [!NOTE]
-> `If-Match` closes the window between the client's read and its write, not the window between this check and the controller's own write. Two writes that both pass the guard microseconds apart can still race. `lock` mode, which re-evaluates the precondition inside a transaction holding a row lock, is on the roadmap.
+> `If-Match` closes the window between the client's read and its write, not the window between this check and the controller's own write. Two writes that both pass the guard microseconds apart can still race. Add the [`lock` flag](#closing-the-race--lock) to close that window too — it re-evaluates the precondition inside a transaction holding a row lock.
 
 Both refusals are `Symfony\Component\HttpKernel\Exception\HttpException` subclasses, so your application's existing exception handler renders and customises them:
 
@@ -522,6 +567,7 @@ Their default bodies live in `lang/en/messages.php`; publish it with the `larave
 - [x] `conditional` middleware — response validators and `304` short-circuiting
 - [x] Configurable exclusions — methods, status codes, routes, and response sizes
 - [x] `conditional:required` middleware — `If-Match` enforcement with `412` / `428`, on every unsafe method, plus the `If-None-Match: *` create guard
+- [x] Optional `lock` mode — a transaction and a row lock with the precondition re-evaluated inside them, closing the check-then-write race
 - [x] Strong and weak ETag generation, with a configurable strategy
 - [x] `Last-Modified` / `If-Modified-Since` support alongside ETags, plus `If-Unmodified-Since` on the write path
 - [x] Model-derived validators, so an ETag comes from the record's version rather than a hash of the rendered body — including the pre-controller `304` short-circuit
@@ -534,9 +580,24 @@ Their default bodies live in `lang/en/messages.php`; publish it with the `larave
 ```bash
 composer test          # static analysis, lint, type coverage, and the test suite
 composer test:unit     # Pest only
+composer test:lock     # row-lock contention; needs MySQL or PostgreSQL (see below)
 composer analyse       # PHPStan
 composer lint          # Pint
 ```
+
+`composer test:lock` is not part of `composer test`, so the suite stays runnable with nothing but PHP and SQLite. It proves that a competing session's row lock forces a `503`, which SQLite cannot demonstrate at all — `lockForUpdate()` compiles to nothing there. Point it at a database you can throw away:
+
+```bash
+CONDITIONAL_LOCK_DRIVER=mysql \
+CONDITIONAL_LOCK_HOST=127.0.0.1 \
+CONDITIONAL_LOCK_PORT=3306 \
+CONDITIONAL_LOCK_DATABASE=conditional_requests \
+CONDITIONAL_LOCK_USERNAME=root \
+CONDITIONAL_LOCK_PASSWORD=secret \
+composer test:lock
+```
+
+Without those variables every test in it skips, naming them. CI runs it against MySQL and PostgreSQL on every push and fails if it skipped.
 
 ## Changelog
 
