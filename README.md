@@ -341,17 +341,35 @@ The guard applies to **every** unsafe method — `POST`, `PUT`, `PATCH`, and `DE
 ```http
 PUT /articles/42
 If-None-Match: *
-→ 200 OK                    # created
+→ 2xx                       # write proceeds; the controller's own status
 
 PUT /articles/42
 If-None-Match: *
 → 412 Precondition Failed   # someone else created it first
 ```
 
+`If-None-Match` on a write is not only the wildcard. A concrete entity tag works too, compared **weakly** per RFC 9110 §13.1.2: if it matches the resource's current validator the write is refused with `412`, and otherwise it proceeds — the same rule the read path already applies, just guarding a write instead of serving a `304`.
+
 For the guard to be able to answer, the route has to address the resource being created and its binding has to be able to report "absent" rather than aborting. Implicit binding raises a `404` for a missing record before the middleware ever runs, so register an explicit binder that returns `null`:
 
 ```php
 Route::bind('article', fn (string $value): ?Article => Article::query()->find($value));
+```
+
+That binder alone is not enough. `SubstituteBindings::handle()` runs `substituteBindings()` — which sets the route parameter to whatever the binder above returned, `null` included — and then `substituteImplicitBindings()`, which re-resolves any action parameter type-hinted against the model. A `null` parameter fails that re-resolution and throws `ModelNotFoundException`, a `404` before `conditional:required` ever runs. So the action must **not** type-hint the model; take `Request` (or the raw route parameter) and resolve the record yourself:
+
+```php
+use Illuminate\Http\Request;
+
+Route::put('/articles/{article}', function (Request $request) {
+    $article = $request->route('article'); // Article|null — not type-hinted, see above
+
+    if ($article === null) {
+        // create the record, then return the response your app wants for a new resource
+    }
+
+    // update $article, then return the response your app wants for that write
+});
 ```
 
 On a collection route such as `POST /articles` there is no bound resource to ask about, so the create guard has nothing to compare and the request proceeds.
@@ -394,6 +412,7 @@ Their default bodies live in `lang/en/messages.php`; publish it with the `larave
 | --- | --- | --- | --- | --- |
 | `If-None-Match` | reads | `304 Not Modified` | `200 OK` with body | yes |
 | `If-None-Match: *` | writes | `412 Precondition Failed` | write proceeds | yes |
+| `If-None-Match` (concrete tag, weak comparison) | writes | `412 Precondition Failed` | write proceeds | yes |
 | `If-Modified-Since` | reads | `304 Not Modified` | `200 OK` with body | no |
 | `If-Match` | writes | write proceeds | `412 Precondition Failed` | yes |
 | `If-Unmodified-Since` | writes | write proceeds | `412 Precondition Failed` | no |

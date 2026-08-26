@@ -8,9 +8,9 @@ namespace ExpertSystems\ConditionalRequests\Http\Middleware;
  * The parsed middleware parameter list.
  *
  * Design §5.2 makes flags order-independent and reserves words that name
- * behaviour rather than a strategy. `required` (v0.3) and `lock` (v0.5) are
- * reserved here, ahead of the releases that implement them, so that
- * `conditional:required` parses today instead of asking the registry for a
+ * behaviour rather than a strategy. `required` (v0.3) is implemented; `lock`
+ * (v0.5) is still reserved here ahead of the release that implements it, so
+ * that `conditional:lock` parses today instead of asking the registry for a
  * strategy of that name and throwing. Adding a reserved word later means
  * extending the chain in parse() and adding a flag to this object.
  */
@@ -57,8 +57,13 @@ final readonly class Flags
      * §5.2 has `required` and `lock` imply `model`, because the write path must
      * know the current validator before the controller runs and a body hash
      * cannot supply one. An explicitly named strategy still wins — pairing
-     * `required` with a strategy that cannot serve it becomes a boot-time error
-     * in v0.3 rather than a silent override here.
+     * `required` with a strategy that cannot serve it is not a silent override
+     * here, nor is it caught at boot: a boot-time route scan cannot see
+     * controller-declared middleware, so it cannot enumerate every guarded
+     * route, and (once `weak => true` is in the mix) weakness is a property of
+     * the Validator a strategy returns rather than of the config key. Neither
+     * fact is visible before a guarded request actually reaches Conditional,
+     * which is where the LogicException is raised instead.
      */
     public function strategyOr(string $default): string
     {

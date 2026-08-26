@@ -84,10 +84,12 @@ return [
     |--------------------------------------------------------------------------
     |
     | Request methods that take part in the read path. This does not gate the
-    | write path: every unsafe method — POST, PUT, PATCH, DELETE — is guarded
-    | when a route carries the middleware, and adding one here does not start
-    | attaching validators to its responses. Use "exclude" to opt a route out
-    | of both paths at once.
+    | write path: every unsafe method — POST, PUT, PATCH, DELETE — takes the
+    | write path when a route carries the middleware, whether or not it is
+    | actually guarded there — with the default "body" strategy and no
+    | "required" flag, that write path is a pure pass-through. Adding a method
+    | here does not start attaching validators to its responses. Use "exclude"
+    | to opt a route out of both paths at once.
     |
     */
 

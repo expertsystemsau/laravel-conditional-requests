@@ -2,9 +2,9 @@
 name: laravel-conditional-requests-development
 description: >
   Add HTTP conditional request handling to a Laravel application with
-  expertsystemsau/laravel-conditional-requests — ETag and Last-Modified validators,
-  304 Not Modified responses on reads, and If-Match lost-update protection on writes
-  (412 Precondition Failed / 428 Precondition Required).
+  expertsystemsau/laravel-conditional-requests — body-hash and model-derived ETag
+  validators, 304 Not Modified responses on reads, and If-Match lost-update
+  protection on writes (412 Precondition Failed / 428 Precondition Required).
 license: MIT
 metadata:
   author: Mitchell Williams
@@ -20,7 +20,12 @@ Use this skill when a Laravel application needs conditional request handling: re
 
 ## Status
 
-The package is pre-release. The middleware below is the design contract for `v1.0.0` and is not implemented yet — do not generate integration code against it until the package ships a tagged release.
+`v0.3` is shipped and tagged. The read path is implemented: `body` (the default, hashing the rendered response) and `model` (deriving a strong `ETag` from a route-bound record's own version) validator strategies, `304 Not Modified` short-circuiting on `If-None-Match`, and — for a strategy that can answer before the controller runs, `model` included — a pre-controller `304` short-circuit that skips the controller entirely. The write path is implemented: `If-Match` refuses a stale write with `412 Precondition Failed`; `conditional:required` additionally refuses a write carrying no precondition at all with `428 Precondition Required`; and `If-None-Match: *` guards a create, so two clients racing to create the same resource produce one success and one `412`.
+
+Not implemented: `If-Unmodified-Since` and the rest of the `Last-Modified` family, and `lock` mode — the flag parses without error but does nothing yet. Do not generate integration code promising either of those.
+
+> [!WARNING]
+> A pre-controller `304` short-circuit runs before anything declared after `conditional` — `can:`, `signed`, subscription and feature gates, and any authorization check inside the controller action included. Always place `conditional` after every middleware that can reject the request.
 
 ## Workflow
 
