@@ -45,7 +45,7 @@ it('bounds a mysql lock wait around the transaction and puts the session back', 
     ])
         ->and($statements['inside'])->toBe([])
         ->and($statements['after'])->toBe([
-            'set session innodb_lock_wait_timeout = @laravel_conditional_requests_lock_timeout',
+            'set session innodb_lock_wait_timeout = ifnull(@laravel_conditional_requests_lock_timeout, @@global.innodb_lock_wait_timeout)',
         ]);
 });
 

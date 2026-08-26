@@ -34,6 +34,16 @@ final readonly class LockWait
      * code — its dispatched jobs, its side effects, its mail — to recover from
      * a lock wait is a worse outcome than the 503 the caller turns this into.
      *
+     * The bound is issued only when this transaction is the outermost one. If
+     * something already opened a transaction on the connection before the
+     * middleware ran — an application-level wrapper, or a test's own
+     * DatabaseTransactions — ours becomes a savepoint, the row lock is held
+     * until that outer commit rather than ours, and Postgres' SET LOCAL would
+     * outlive the savepoint and go on bounding every later statement in the
+     * outer transaction. Retuning a transaction the package does not own is the
+     * worse of the two, so the wait is left at the server's setting there. The
+     * re-read, the FOR UPDATE, and the second evaluation are unaffected.
+     *
      * @template TReturn
      *
      * @param  Closure(): TReturn  $callback
@@ -41,7 +51,9 @@ final readonly class LockWait
      */
     public function transaction(Connection $connection, int $seconds, Closure $callback): mixed
     {
-        $statements = $this->statements($connection->getDriverName(), $seconds);
+        $statements = $connection->transactionLevel() === 0
+            ? $this->statements($connection->getDriverName(), $seconds)
+            : ['before' => [], 'inside' => [], 'after' => []];
 
         foreach ($statements['before'] as $statement) {
             $connection->statement($statement);
@@ -56,8 +68,18 @@ final readonly class LockWait
                 return $callback();
             });
         } finally {
-            foreach ($statements['after'] as $statement) {
-                $connection->statement($statement);
+            try {
+                foreach ($statements['after'] as $statement) {
+                    $connection->statement($statement);
+                }
+            } catch (Throwable) {
+                // A restore that fails must not become the exception the caller
+                // sees. The realistic case is a connection that died inside the
+                // transaction: the rollback leaves transactionLevel at 0, so
+                // Laravel silently reconnects for the statement below, and a
+                // reconnect that then fails outright would replace the real
+                // error with its own. The statement is itself written to
+                // survive the reconnect that succeeds — see statements().
             }
         }
     }
@@ -67,13 +89,21 @@ final readonly class LockWait
      * they have to run.
      *
      * Postgres has SET LOCAL, which is scoped to the transaction and reverts
-     * itself at commit or rollback — one statement, no restore, no way to leak.
-     * MySQL's innodb_lock_wait_timeout is session-scoped with no transactional
-     * equivalent, so the previous value is captured into a user variable and put
-     * back afterwards. Under plain FPM the connection dies with the request and
-     * the restore is redundant; under Octane, a persistent PDO, or a pooled
-     * connection it is the difference between bounding one query and silently
-     * retuning someone's database session for every later one.
+     * itself at commit or rollback — one statement, no restore, and nothing to
+     * leak, because transaction() only ever issues it in a transaction of our
+     * own. MySQL's innodb_lock_wait_timeout is session-scoped with no
+     * transactional equivalent, so the previous value is captured into a user
+     * variable and put back afterwards. Under plain FPM the connection dies with
+     * the request and the restore is redundant; under Octane, a persistent PDO,
+     * or a pooled connection it is the difference between bounding one query and
+     * silently retuning someone's database session for every later one.
+     *
+     * The restore reads the saved value through IFNULL. User variables are
+     * per-session, so a connection that died inside the transaction and was
+     * transparently reconnected has none: the bare variable would be NULL, which
+     * innodb_lock_wait_timeout rejects, turning a lost connection into a
+     * confusing SET error. Falling back to the server's own global value puts
+     * the fresh session back where it already was.
      *
      * The interval is interpolated rather than bound: SET accepts no parameter
      * placeholders on either server, and the value is an int cast from config.
@@ -101,7 +131,7 @@ final readonly class LockWait
                 ],
                 'inside' => [],
                 'after' => [
-                    'set session innodb_lock_wait_timeout = @laravel_conditional_requests_lock_timeout',
+                    'set session innodb_lock_wait_timeout = ifnull(@laravel_conditional_requests_lock_timeout, @@global.innodb_lock_wait_timeout)',
                 ],
             ],
             default => $none,
