@@ -353,22 +353,66 @@ it('reports no opinion on a field value that is not an HTTP date', function (): 
     $evaluator = new PreconditionEvaluator;
     $current = datedValidator('2026-08-26 12:00:00');
 
-    // The whitespace case is not decoration: strtotime('   ') returns the
-    // current time rather than false, so a blank value that reached the parser
-    // would satisfy every precondition it was asked about.
     expect($evaluator->unmodifiedSince('not a date', $current))->toBeNull()
         ->and($evaluator->unmodifiedSince('   ', $current))->toBeNull()
         ->and($evaluator->unmodifiedSince('', $current))->toBeNull();
 });
 
+it('ignores a relative or colloquial value that only strtotime would accept', function (): void {
+    // §13.1.4 requires a recipient to ignore a field value that is not a valid
+    // HTTP-date, and strtotime() accepts a great deal that is not one. Every
+    // value below parses to a real timestamp there — `x` among them, which is
+    // what a client templating an empty placeholder sends. Each would have
+    // landed at or after the record's modification date, satisfied the update
+    // guard, and counted as the precondition a `required` route demands.
+    $evaluator = new PreconditionEvaluator;
+    $current = datedValidator('2026-08-26 12:00:00');
+
+    expect($evaluator->unmodifiedSince('x', $current))->toBeNull()
+        ->and($evaluator->unmodifiedSince('now', $current))->toBeNull()
+        ->and($evaluator->unmodifiedSince('tomorrow', $current))->toBeNull()
+        ->and($evaluator->unmodifiedSince('+1 day', $current))->toBeNull()
+        ->and($evaluator->unmodifiedSince('Thursday', $current))->toBeNull()
+        ->and($evaluator->unmodifiedSince('GMT', $current))->toBeNull();
+});
+
+it('does not let a relative value satisfy a required route', function (): void {
+    // The same values through the supplied()/evaluate() path the write route
+    // actually takes: an ignored field value is not a precondition, so a
+    // `required` route asks for a real one rather than writing.
+    $evaluator = new PreconditionEvaluator;
+
+    foreach (['x', 'now', 'tomorrow', '+1 day'] as $value) {
+        expect($evaluator->evaluate(
+            guardedRequest(['If-Unmodified-Since' => $value]),
+            datedValidator('2026-08-26 12:00:00'),
+            true,
+        ))->toBe(PreconditionOutcome::Required)
+            ->and($evaluator->supplied(guardedRequest(['If-Unmodified-Since' => $value])))->toBeFalse();
+    }
+});
+
+it('ignores an HTTP date carrying trailing junk', function (): void {
+    // createFromFormat() returns a date for a value with trailing data and
+    // reports it only as a warning, so the parser tests getLastErrors() rather
+    // than the return type.
+    $evaluator = new PreconditionEvaluator;
+    $current = datedValidator('2026-08-26 12:00:00');
+
+    expect($evaluator->unmodifiedSince('Wed, 26 Aug 2026 12:00:00 GMT tomorrow', $current))->toBeNull();
+});
+
 it('compares an HTTP date in any of the formats a recipient must accept', function (): void {
-    // §5.6.7: IMF-fixdate, the obsolete RFC 850 form, and asctime.
+    // §5.6.7: IMF-fixdate, the obsolete RFC 850 form, and asctime. asctime
+    // carries no zone — `Wed Aug 26 12:00:00 2026 GMT` is not one of the three
+    // formats and is ignored, whatever strtotime() would have made of it.
     $evaluator = new PreconditionEvaluator;
     $current = datedValidator('2026-08-26 12:00:00');
 
     expect($evaluator->unmodifiedSince('Wed, 26 Aug 2026 12:00:00 GMT', $current))->toBeTrue()
         ->and($evaluator->unmodifiedSince('Wednesday, 26-Aug-26 12:00:00 GMT', $current))->toBeTrue()
-        ->and($evaluator->unmodifiedSince('Wed Aug 26 12:00:00 2026 GMT', $current))->toBeTrue();
+        ->and($evaluator->unmodifiedSince('Wed Aug 26 12:00:00 2026', $current))->toBeTrue()
+        ->and($evaluator->unmodifiedSince('Wed Aug 26 12:00:00 2026 GMT', $current))->toBeNull();
 });
 
 // --- precedence and the required flag ---

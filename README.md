@@ -437,6 +437,9 @@ It satisfies `required`, so a client that sends it is not answered `428`.
 > [!IMPORTANT]
 > A resource that publishes no date refuses an `If-Unmodified-Since` with `412` rather than ignoring it. That covers a model with no timestamps, a record that changed within the current second, and `last_modified => false`. A client that sends this header is asking to be refused when the server cannot vouch for the state; proceeding would hand it a guard that silently does nothing.
 
+> [!IMPORTANT]
+> **Only the three formats RFC 9110 §5.6.7 defines are HTTP-dates**: IMF-fixdate (`Wed, 26 Aug 2026 12:00:00 GMT`), the obsolete RFC 850 form, and asctime (`Wed Aug 26 12:00:00 2026`, with no zone). Anything else — `x`, `now`, `tomorrow`, `+1 day`, an empty template placeholder — is ignored per §13.1.4, exactly as if the header had not been sent, so it neither guards a write nor satisfies `required` on a route that demands one. PHP's `strtotime()` parses all of those to real timestamps; this package does not use it here, because a value that resolves to "now" would satisfy every precondition it was asked about and silently turn the guard into a no-op.
+
 `If-Modified-Since` is a read-path header and is ignored on a write (§13.1.3), so it neither guards a write nor satisfies `required`.
 
 ### Requirements and caveats for guarded routes

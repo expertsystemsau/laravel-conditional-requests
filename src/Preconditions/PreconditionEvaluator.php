@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ExpertSystems\ConditionalRequests\Preconditions;
 
 use DateTimeImmutable;
+use DateTimeZone;
 use ExpertSystems\ConditionalRequests\Validators\Validator;
 use Illuminate\Http\Request;
 
@@ -233,30 +234,43 @@ final readonly class PreconditionEvaluator
     /**
      * An HTTP-date as a Unix timestamp, or null when it is not one.
      *
-     * strtotime() is what Symfony's Response::isNotModified() uses for
-     * If-Modified-Since, so both halves of the family accept exactly the same
-     * field values — including all three formats §5.6.7 requires a recipient to
-     * read. HeaderBag::getDate() would be the tidier call and is unusable: it
-     * throws RuntimeException on a value it cannot parse, and §7 wants a
-     * malformed validator header ignored rather than fatal.
+     * The three formats are §5.6.7's, in the order a recipient is required to
+     * read them: IMF-fixdate, the obsolete RFC 850 form, and asctime. Nothing
+     * else is an HTTP-date, and §13.1.4 requires a recipient to IGNORE a field
+     * value that is not one — which is what returning null means here.
      *
-     * The blank check is load-bearing rather than defensive. strtotime('   ')
-     * returns the *current time* instead of false, so a whitespace-only field
-     * value reaching the parser would be read as "unmodified since now" and
-     * satisfy every precondition it was asked about. evaluate() already treats
-     * a blank header as absent; this makes the parser safe on its own terms.
+     * strtotime() was the obvious call and cannot be used, which is the whole
+     * point of this method. It parses relative and colloquial expressions: on
+     * this machine `now`, `tomorrow`, `+1 day`, `Thursday`, `GMT` and even `x`
+     * all yield a real timestamp. A client templating `If-Unmodified-Since:
+     * ${date}` with an empty placeholder therefore produced a value at or
+     * after the record's modification date, passed the update guard, AND
+     * satisfied `required` — the blank-If-Match bypass again, and on the write
+     * path it costs a lost-update guard rather than a spurious 304.
+     *
+     * createFromFormat() is the strict counterpart, with two details that
+     * carry the strictness. The `!` prefix resets every field the format does
+     * not name, so an incomplete value cannot borrow the current time for the
+     * rest of itself. And getLastErrors() is consulted rather than trusted to
+     * the return type: PHP returns a DateTimeImmutable for a value with
+     * trailing junk and reports that only as a warning, so `false` from
+     * getLastErrors() — no errors and no warnings — is the real test.
+     *
+     * HeaderBag::getDate() would be tidier still and is unusable: it throws
+     * RuntimeException on a value it cannot parse, and §7 wants a malformed
+     * validator header ignored rather than fatal.
      */
     private function httpDate(string $value): ?int
     {
-        $value = trim($value);
+        foreach (['D, d M Y H:i:s T', 'l, d-M-y H:i:s T', 'D M j H:i:s Y'] as $format) {
+            $date = DateTimeImmutable::createFromFormat('!'.$format, trim($value), new DateTimeZone('UTC'));
 
-        if ($value === '') {
-            return null;
+            if ($date instanceof DateTimeImmutable && DateTimeImmutable::getLastErrors() === false) {
+                return $date->getTimestamp();
+            }
         }
 
-        $timestamp = strtotime($value);
-
-        return $timestamp === false ? null : $timestamp;
+        return null;
     }
 
     /**
