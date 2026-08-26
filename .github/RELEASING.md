@@ -10,7 +10,20 @@ Nothing is tagged until all six pass.
 
 1. `composer test` green on `main` — PHPStan level 7, Pint, 100% type coverage,
    the full Pest suite, the public-API snapshot, and the documentation link
-   test.
+   test. **A green local run is not enough for PHPStan.** The constraint
+   resolves to the newest analyser locally, and `prefer-lowest` pins an older
+   one whose inference is weaker: on v1.0.0 the `tests` workflow failed every
+   leg on an error no local run could produce, and fail-fast cancelled the
+   prefer-stable legs so the summary named the wrong culprit. Read the workflow
+   result on `main`, or reproduce the resolution in a scratch copy:
+
+   ```bash
+   git ls-files -z | tar --null -cf - -T - | tar -xf - -C /tmp/lowest
+   cd /tmp/lowest
+   composer require "laravel/framework:12.*" "orchestra/testbench:10.*" --no-interaction --no-update
+   composer update --prefer-lowest --prefer-dist --no-interaction --no-scripts
+   composer analyse
+   ```
 2. `composer test:lock` green against **both** MySQL and PostgreSQL, either
    locally with the `CONDITIONAL_LOCK_*` environment or by reading the
    `locking` workflow's last run on `main`. That workflow fails if the suite
@@ -56,13 +69,33 @@ written the `## v1.0.0` section by hand, the section appears twice.
   `compare/v1.0.0...main` and commit that. Until the first tag exists there is
   nothing to compare against, which is why it points at the commit history now.
 
+**The action inserts; it does not move.** This was learned the hard way on
+v1.0.0. `changelog-updater-action` writes the release body it is handed in as a
+new version section beneath `## [Unreleased]`, and it leaves whatever was already
+under `[Unreleased]` exactly where it was. Because this repository ships the
+whole release under `[Unreleased]`, publishing produces the content **twice** —
+once under `[Unreleased]`, once under the new version heading. That is not a
+mistake by the maintainer and pre-writing the heading is not what causes it.
+
+So after publishing, and after `git pull`, expect to do all of this by hand in
+one commit:
+
+- Empty the `[Unreleased]` section, leaving the heading and no body.
+- Repair both heading links. The action builds them by appending to whatever URL
+  the `[Unreleased]` heading already carried, so with `commits/main` in place it
+  emitted `…/commits/main/compare/v1.0.0...HEAD` and
+  `…/commits/main/compare/main...v1.0.0` — both 404. They should be
+  `…/compare/v1.0.0...main` for `[Unreleased]`, and for the first release
+  `…/releases/tag/v1.0.0` for the version heading, since there is no earlier tag
+  to compare against.
+
 Two exceptions worth writing down:
 
 - If branch protection on `main` requires pull requests, `git-auto-commit-action`
   cannot push. The workflow fails and it is easy to miss. In that case write the
-  `## v1.0.0` heading by hand and expect the workflow to be red.
-- If the changelog ends up with the section twice, the release body was pasted
-  *and* the heading was pre-written. Delete one; the file is the only casualty.
+  version heading by hand and expect the workflow to be red.
+- Everything the action gets wrong is confined to `CHANGELOG.md`. Fix the file;
+  nothing else is affected, and there is no need to re-cut the release.
 
 ## 3. Tag and release — second and third traps
 
