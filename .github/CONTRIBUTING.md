@@ -11,6 +11,8 @@ For significant changes, please open an issue first so we can discuss the approa
 3. Code, test, commit, and push
 4. Open a pull request detailing your changes
 
+Maintainers cutting a release: see [RELEASING.md](RELEASING.md).
+
 ## Guidelines
 
 - Ensure the coding style passes by running `composer lint`.
