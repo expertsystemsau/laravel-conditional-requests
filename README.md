@@ -48,10 +48,10 @@ Route::get('/articles/{article}', ShowArticle::class)
 ```http
 GET /articles/42
 → 200 OK
-  ETag: "d41d8cd98f00b204"
+  ETag: "d41d8cd98f00b204e9800998ecf8427e"
 
 GET /articles/42
-If-None-Match: "d41d8cd98f00b204"
+If-None-Match: "d41d8cd98f00b204e9800998ecf8427e"
 → 304 Not Modified          # no body, no serialization
 ```
 
@@ -77,11 +77,11 @@ Route::patch('/articles/{article}', UpdateArticle::class)
 
 ```http
 PATCH /articles/42
-If-Match: "9b1c0e0f6b0a4f9d"
+If-Match: "9b1c0e0f6b0a4f9d3e7a2c81f4d6b059"
 → 200 OK                    # still current, write applied
 
 PATCH /articles/42
-If-Match: "9b1c0e0f6b0a4f9d"
+If-Match: "9b1c0e0f6b0a4f9d3e7a2c81f4d6b059"
 → 412 Precondition Failed   # someone else got there first
 
 PATCH /articles/42

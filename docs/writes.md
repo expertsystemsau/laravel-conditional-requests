@@ -15,11 +15,11 @@ Route::patch('/articles/{article}', UpdateArticle::class)
 
 ```http
 PATCH /articles/42
-If-Match: "9b1c0e0f6b0a4f9d"
+If-Match: "9b1c0e0f6b0a4f9d3e7a2c81f4d6b059"
 → 200 OK                    # still current, write applied
 
 PATCH /articles/42
-If-Match: "9b1c0e0f6b0a4f9d"
+If-Match: "9b1c0e0f6b0a4f9d3e7a2c81f4d6b059"
 → 412 Precondition Failed   # someone else got there first
 
 PATCH /articles/42
@@ -71,7 +71,7 @@ Route::put('/articles/{article}', function (Request $request) {
     }
 
     // update $article, then return the response your app wants for that write
-});
+})->middleware('conditional:required');
 ```
 
 On a collection route such as `POST /articles` there is no bound resource to ask about, so the create guard has nothing to compare and the request proceeds.
@@ -193,6 +193,7 @@ final readonly class SharedLockStrategy implements LockableValidatorStrategy
         // fromRequest() answers from afterwards — rebind the route parameter,
         // exactly as ModelStrategy::lockAndRefresh() does — or the second
         // evaluation reads the same stale record as the first.
+        return $this->inner->lockAndRefresh($request, $target);
     }
 }
 ```

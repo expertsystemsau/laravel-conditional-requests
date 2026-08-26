@@ -73,10 +73,10 @@ Route::get('/articles/{article}', ShowArticle::class)
 ```http
 GET /articles/42
 → 200 OK
-  ETag: "9b1c0e0f6b0a4f9d"
+  ETag: "9b1c0e0f6b0a4f9d3e7a2c81f4d6b059"
 
 GET /articles/42
-If-None-Match: "9b1c0e0f6b0a4f9d"
+If-None-Match: "9b1c0e0f6b0a4f9d3e7a2c81f4d6b059"
 → 304 Not Modified          # the controller never ran
 ```
 
@@ -170,7 +170,7 @@ A model-derived validator publishes the record's modification date alongside its
 ```http
 GET /articles/42
 → 200 OK
-  ETag: "9b1c0e0f6b0a4f9d"
+  ETag: "9b1c0e0f6b0a4f9d3e7a2c81f4d6b059"
   Last-Modified: Wed, 26 Aug 2026 12:00:00 GMT
 
 GET /articles/42
@@ -289,7 +289,7 @@ Answering early also suppresses the streamed, binary, and size-ceiling checks fo
 
 ## Responses that never get a validator
 
-Six rules, all of them in `Conditional::eligible()` and `Conditional::requestEligible()`:
+Six rules, all but one of them in `Conditional::eligible()` and `Conditional::requestEligible()` — the empty-body rule lives in `BodyHashStrategy::fromResponse()`:
 
 - **Anything that is not 2xx.** `$response->isSuccessful()` gates the lot. A validator on an error response is meaningless.
 - **Anything that already carries an `ETag`.** Your tag is preserved — and that response then takes no part in `304` handling at all. Those are the same sentence and only the first half is obvious: see [H11](hazards.md#h11).
