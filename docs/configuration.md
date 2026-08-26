@@ -25,7 +25,7 @@ Nine keys, in the order they appear in `config/laravel-conditional-requests.php`
 | Key | Type | Default | Governs |
 | --- | --- | --- | --- |
 | `enabled` | `bool` | `true` | Master switch over **both** paths. `false` is a true pass-through: no validator is attached, the `HEAD` method is not mutated, and every lost-update guard in the application is removed with it. |
-| `strategy` | `string` | `'body'` | Which registered strategy produces validators on a route that names none. A middleware flag always wins. An unregistered name is a per-request `500` → [H13](hazards.md#h13). |
+| `strategy` | `string` | `'body'` | Which registered strategy produces validators on a route that names none. A middleware flag always wins. An unregistered name is a per-request `500` → [H13](hazards.md#h13). Setting this to `'model'` **while `conditional` is registered as kernel-global middleware** inverts every write guard in the application → [H12](hazards.md#h12). |
 | `hash` | `string` | `'xxh128'` | The algorithm the `body` strategy hashes with; any name `hash()` accepts. `model` derives its tag from the record and never reads this key. Not a security primitive → [H14](hazards.md#h14). |
 | `weak` | `bool` | `false` | Emits `W/"…"` on both strategies. **Pairing this with a guarded write route throws a `LogicException`** — a weak validator can never satisfy `If-Match`, so the guard would be inverted rather than merely disabled. |
 | `last_modified` | `bool` | `true` | Whether model-derived validators publish the record's modification date. Governs the header **and** the `If-Unmodified-Since` guard together: with it off, responses carry no date and a write offering only that header is refused with `412` rather than passing unguarded. |

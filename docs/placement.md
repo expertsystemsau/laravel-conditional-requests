@@ -32,7 +32,9 @@ Supported, and it costs four things — all of them silent, none of them errors:
 - **Route-name exclusions are ignored on the write path.** URI patterns still work.
 - **A global instance adds no write guard of its own**, because it cannot read a route's flags before routing.
 
-All four are [H12](hazards.md#h12).
+And one that is not silent at all: **with `strategy => 'model'` in the config, a kernel-global `conditional` refuses every write that carries an `If-Match` with `412`, while every write that carries nothing succeeds.** The deferral in the fourth bullet only applies to a strategy that cannot answer before the controller; `model` can, so the guard runs against a route that has not been resolved and a record it cannot reach. Leave `strategy` at `body` when placing `conditional` globally, and name `conditional:model` on the routes that want it.
+
+All five are [H12](hazards.md#h12).
 
 One thing global placement gets right, and route placement never needs: `Conditional::excluded()` is re-checked **after** `$next()`, precisely because `Request::routeIs()` is always false before routing. That second check is why a route-name exclusion is honoured on the read path under global placement at all.
 

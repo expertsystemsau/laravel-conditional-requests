@@ -260,7 +260,7 @@ Scope is unchanged; only the sequence moved.
 | `v0.3` | Write path, `If-Match` → 412, `required` → 428, `If-None-Match: *` create guard — **shipped** |
 | `v0.4` | `Last-Modified` / `If-Modified-Since` / `If-Unmodified-Since` — **shipped** |
 | `v0.5` | `lock` mode with in-transaction re-evaluation — **shipped** |
-| `v1.0` | Documentation, `werk365/etagconditionals` migration guide, API freeze |
+| `v1.0` | Documentation, `werk365/etagconditionals` migration guide, API freeze — **shipped** |
 
 ## 10. Non-goals
 
@@ -321,4 +321,4 @@ Only (3) is fully avoidable by configuration; (1) is avoidable at the cost of th
 - Optional pessimistic locking that actually closes the lost-update window (D1)
 - Boot-time validation: `required` with a weak strategy, or `lock` without a lockable resource, throws instead of failing mysteriously at runtime
 - Configurable skip rules — methods, status codes, routes, response size
-- Migration guide mapping `setEtag` / `ifNoneMatch` / `ifMatch` onto `conditional` flags
+- Migration guide mapping `setEtag` / `ifNoneMatch` / `ifMatch` onto `conditional` flags — [`docs/migrating-from-werk365.md`](../migrating-from-werk365.md)

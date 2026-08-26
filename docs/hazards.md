@@ -28,7 +28,7 @@ Nothing here is a bug report. Every one of these is either inherent to answering
 | [H9](#h9) | you use `conditional:...,lock` | your controller runs inside a transaction |
 | [H10](#h10) | you use `lock` on SQLite | no lock at all |
 | [H11](#h11) | anything sets an `ETag` before `conditional` sees the response | validators silently stop working |
-| [H12](#h12) | `conditional` is registered as kernel-global middleware | no short-circuit, untagged `HEAD`s, and half of `exclude` |
+| [H12](#h12) | `conditional` is registered as kernel-global middleware | no short-circuit, untagged `HEAD`s, half of `exclude` — and every guarded write refused, if `strategy` is `model` |
 | [H13](#h13) | you publish the config file | a typo is a production outage, not a degradation |
 | [H14](#h14) | response bodies contain attacker-influenced content and serving a stale copy matters | a crafted body suppresses a client refresh |
 | [H15](#h15) | you call `extend()` anywhere but a service provider's `boot()` | permanently mutated shared state |
@@ -220,16 +220,17 @@ The sharp case is `['conditional:model', 'cache.headers:public;max_age=60;etag']
 
 ### H12 — Kernel-global placement gives up the short-circuit, `HEAD` tags, and half of `exclude`
 
-**What happens.** Four things, none of them errors and all of them silent:
+**What happens.** Four things, none of them errors and all of them silent — and a fifth that is neither silent nor harmless:
 
 - **No pre-controller short-circuit, ever.** `conditional` runs before `SubstituteBindings`, so `model` finds no bound record and the controller runs on every request. The tag is still attached on the way out, so `304` still happens — the bandwidth saving survives and the compute saving does not.
 - **`HEAD` requests under `body` go untagged.** The `HEAD`-to-`GET` mutation is deliberately not applied before routing, so the router empties the body for the `HEAD` it can see and there is nothing left to hash.
 - **Route-name exclusions are ignored on the write path.** `Request::routeIs()` answers false for every pattern before routing, and the write path has no second chance. URI patterns such as `internal/*` still work, as does `enabled => false`.
-- **A global instance adds no write guard.** Ahead of the router it cannot read a route's flags, so it defers rather than refusing a precondition it cannot evaluate — which is what keeps the `conditional:required` and `conditional:model` guards on the routes underneath it working.
+- **A global instance adds no write guard**, *as long as the `strategy` config key is left at `body`*. Ahead of the router it cannot read a route's flags, so it defers rather than refusing a precondition it cannot evaluate — which is what keeps the `conditional:required` and `conditional:model` guards on the routes underneath it working.
+- **With `strategy => 'model'`, kernel-global placement inverts every write guard in the application.** The deferral above only covers a strategy that cannot answer before the controller. `model` can, so a global instance runs the guard — against a route that has not been resolved, where the record is unreachable and the current validator is `null`. Verified: a `PATCH` carrying `If-Match` answers `412` and the same `PATCH` carrying nothing answers `200`. Every client doing the right thing is refused; every client doing nothing writes freely.
 
-**You are exposed if** `conditional` is pushed onto the kernel's global middleware stack rather than named on a route or a group.
+**You are exposed if** `conditional` is pushed onto the kernel's global middleware stack rather than named on a route or a group. The fifth item needs `strategy => 'model'` in the config as well.
 
-**What to do.** Prefer route or group placement. Global placement remains supported, and `Conditional::excluded()` is deliberately re-checked after `$next()` so that route-name exclusions are honoured on the read path there.
+**What to do.** Prefer route or group placement. Global placement remains supported, and `Conditional::excluded()` is deliberately re-checked after `$next()` so that route-name exclusions are honoured on the read path there. **Do not combine kernel-global placement with `strategy => 'model'`.** If you want model-derived tags everywhere, name `conditional:model` on the routes or groups that should have them and leave the global default at `body`; if you want a global instance, leave `strategy` alone.
 
 **Why it works this way.** Global middleware runs outside the router. Two consequences that used to be worse are closed in code and are **not** live: a `304` manufactured at that position once leaked PHP's `default_mimetype` as a `Content-Type` (`Conditional::complete()` now calls `Response::prepare()` on both paths — see `tests/Feature/NotModifiedPreparationTest.php`), and a `HEAD` was once routed as a `GET`, so a `Route::match(['HEAD'], …)` route answered `405` (the mutation is now gated on a resolved route — see `tests/Feature/HeadRequestTest.php`). What is left is the list above, which is placement cost rather than defect.
 
@@ -328,7 +329,7 @@ Under a request-derived strategy such as `model` there is no body to hash and no
 | A client keeps reading a record after you revoked its access | [H1](#h1) |
 | A cached page's `Cache-Control` changed on its own | [H6](#h6), [H12](#h12) |
 | Every conditional route returns `500` | [H13](#h13) |
-| Every guarded write returns `412` | see [writes.md](writes.md#requirements-and-caveats-for-guarded-routes) — ordering, or a model with no version |
+| Every guarded write returns `412` | see [writes.md](writes.md#requirements-and-caveats-for-guarded-routes) — ordering, a model with no version, or kernel-global placement under `strategy => 'model'` ([H12](#h12)) |
 | A guarded write returns `503` | [H9](#h9) |
 | A queued job ran against data the request had not committed | [H9](#h9) |
 | A request timer or metric reports nonsense on a `304` | [H2](#h2) |
