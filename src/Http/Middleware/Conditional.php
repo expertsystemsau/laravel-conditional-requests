@@ -172,8 +172,26 @@ final readonly class Conditional
         // LockableValidatorStrategy extends RequestValidatorStrategy: a `lock`
         // route whose strategy is neither fails both, and this is the error
         // that names everything wrong with it in one pass.
-        if ($flags->lock && ! $strategy instanceof LockableValidatorStrategy) {
-            throw $this->lockableStrategyError($request, $name);
+        //
+        // The narrowed strategy is kept in its own variable rather than left
+        // for the call to locked() to re-derive from $flags->lock. Proving that
+        // `$flags->lock` implies `$strategy instanceof LockableValidatorStrategy`
+        // two hundred lines further down requires the analyser to carry this
+        // throw's condition through everything in between, which PHPStan does
+        // only from 2.2 onward — larastan ^3.9 resolves 2.1.32 under
+        // `prefer-lowest`, where the call was reported as passing a plain
+        // RequestValidatorStrategy. A nullable local needs no such inference on
+        // any version, and re-testing $strategy here instead would be reported
+        // as an already-narrowed type on 2.2. Non-null exactly when the flag is
+        // set and the guard passed.
+        $lockable = null;
+
+        if ($flags->lock) {
+            if (! $strategy instanceof LockableValidatorStrategy) {
+                throw $this->lockableStrategyError($request, $name);
+            }
+
+            $lockable = $strategy;
         }
 
         if (! $strategy instanceof RequestValidatorStrategy) {
@@ -252,12 +270,12 @@ final readonly class Conditional
             throw $refusal;
         }
 
-        // No second instanceof here: the guard at the top of this method has
-        // already thrown for a `lock` route whose strategy is not lockable, so
-        // the flag alone is enough to narrow $strategy — and re-testing it is
-        // an error PHPStan reports rather than a belt-and-braces check.
-        return $flags->lock
-            ? $this->locked($request, $next, $strategy, $current, $flags->required)
+        // $lockable is non-null exactly when $flags->lock is set, because the
+        // guard at the top of this method throws for a `lock` route whose
+        // strategy is not lockable. Branching on it rather than on the flag is
+        // what keeps the type provable here without a second instanceof.
+        return $lockable instanceof LockableValidatorStrategy
+            ? $this->locked($request, $next, $lockable, $current, $flags->required)
             : $next($request);
     }
 
