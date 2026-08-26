@@ -5,9 +5,12 @@ declare(strict_types=1);
 namespace ExpertSystems\ConditionalRequests;
 
 use ExpertSystems\ConditionalRequests\Http\Middleware\Conditional;
+use ExpertSystems\ConditionalRequests\Locking\LockWait;
 use ExpertSystems\ConditionalRequests\Validators\BodyHashStrategy;
 use ExpertSystems\ConditionalRequests\Validators\ModelStrategy;
 use Illuminate\Contracts\Config\Repository;
+use Illuminate\Contracts\Database\ConcurrencyErrorDetector as ConcurrencyErrorDetectorContract;
+use Illuminate\Database\ConcurrencyErrorDetector;
 use Illuminate\Routing\Router;
 use Illuminate\Support\ServiceProvider;
 
@@ -21,6 +24,19 @@ class ConditionalRequestsServiceProvider extends ServiceProvider
         $this->mergeConfigFrom(__DIR__.'/../config/laravel-conditional-requests.php', 'laravel-conditional-requests');
 
         $this->app->singleton(ConditionalRequests::class);
+
+        $this->app->bind(LockWait::class, function (): LockWait {
+            // Resolved the way the framework's own DetectsConcurrencyErrors
+            // resolves it — from the container when an application has bound a
+            // detector of its own, from the concrete class otherwise. Nothing
+            // in a default install binds the contract, so type-hinting it on
+            // LockWait's constructor alone would fail to resolve.
+            return new LockWait(
+                app()->bound(ConcurrencyErrorDetectorContract::class)
+                    ? app(ConcurrencyErrorDetectorContract::class)
+                    : new ConcurrencyErrorDetector,
+            );
+        });
     }
 
     /**

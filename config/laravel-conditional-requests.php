@@ -139,4 +139,27 @@ return [
 
     'exclude' => [],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Lock Wait Timeout
+    |--------------------------------------------------------------------------
+    |
+    | How many seconds a route flagged "conditional:...,lock" will wait for the
+    | row lock before giving up with 503 Service Unavailable. Set 0 to leave
+    | your server's own setting alone — note that PostgreSQL's lock_timeout
+    | defaults to 0, which means wait forever.
+    |
+    | Applied per request on PostgreSQL (SET LOCAL, transaction-scoped) and on
+    | MySQL / MariaDB (SET SESSION, restored afterwards). Other drivers have no
+    | equivalent and ignore it; sqlite has no row locks at all.
+    |
+    | This key is flat rather than nested under a "lock" array on purpose:
+    | mergeConfigFrom() merges only top-level keys, so a published config file
+    | written before this key existed would read a nested lock.timeout as null
+    | instead of picking up the default below.
+    |
+    */
+
+    'lock_timeout' => 5,
+
 ];

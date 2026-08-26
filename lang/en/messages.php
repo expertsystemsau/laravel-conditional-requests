@@ -19,4 +19,16 @@ return [
 
     'precondition_required' => 'This request must be conditional. Send an If-Match header carrying the entity tag of the version you are modifying, or If-None-Match: * to create a resource only if it does not already exist.',
 
+    /*
+    |--------------------------------------------------------------------------
+    | Lock Timeout Message
+    |--------------------------------------------------------------------------
+    |
+    | The body of the 503 a guarded write receives when the row it needs is
+    | already locked by another request and the wait ran out.
+    |
+    */
+
+    'lock_timeout' => 'This resource is being modified by another request. Nothing was changed. Please retry in a moment.',
+
 ];
