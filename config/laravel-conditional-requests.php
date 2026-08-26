@@ -12,6 +12,14 @@ return [
     | Master switch. When false the middleware becomes a pass-through, which
     | is useful for isolating behaviour while debugging a caching problem.
     |
+    | It is not only a caching switch. The write path checks this key first, so
+    | turning it off also removes every lost-update guard in the application:
+    | a "conditional:required" route stops answering 428 for a write that names
+    | no version, stops refusing a stale If-Match with 412, and applies the
+    | write. Flipping this during an incident quietly reopens the mid-air
+    | collision it was never about. "exclude" behaves the same way and is the
+    | narrower tool — reach for it on the routes actually giving trouble.
+    |
     */
 
     'enabled' => true,

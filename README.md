@@ -389,6 +389,9 @@ On a collection route such as `POST /articles` there is no bound resource to ask
 > `conditional:required` must run **after** `SubstituteBindings`, and its model must produce a validator. Inside the `api` or `web` middleware group the ordering is already right. Get it wrong — kernel-global placement, or a hand-written list that puts `conditional` first — and the guard cannot see the record at all: every `If-Match` is refused with `412`, and so is every `If-None-Match: *`, because a strategy that cannot tell whether the target exists fails the create guard closed. On the read path a wrong ordering only costs the compute saving; on the write path it stops writes.
 
 > [!IMPORTANT]
+> `enabled => false` is not only a caching kill switch. The write path checks it first, so turning it off removes every lost-update guard in the application at the same time: a `conditional:required` route stops answering `428`, stops refusing a stale `If-Match` with `412`, and applies the write. Flipping it while debugging a caching problem quietly reopens the mid-air collision it was never about. `exclude` does the same thing for the routes it matches, and is the narrower tool.
+
+> [!IMPORTANT]
 > Under kernel-global placement only half of `exclude` can suppress the write guard. The decision has to precede the controller, and nothing has been routed at that point, so `Request::routeIs()` answers false for every pattern: a **route-name** exclusion such as `admin.*` is silently ignored on the write path there. **URI** patterns such as `internal/*` still work, as does `enabled => false`. Under route or group placement — the ordering the section above already requires — both halves work as documented.
 
 > [!IMPORTANT]
