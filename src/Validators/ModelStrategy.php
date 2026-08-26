@@ -110,8 +110,8 @@ final readonly class ModelStrategy implements RequestValidatorStrategy
                 .'cannot tell which record the write is protecting. The first bound parameter wins, and the '
                 .'controller on a nested route usually writes the last — so the client naming the record it '
                 .'is modifying is refused with 412 while the one naming a record it is not touching writes. '
-                .'Implement the contract only on the record this route represents, or override '
-                .'conditionalValidator() on that record to fold the other one in.',
+                .'Implement the contract only on the record this route represents, or take the conditional '
+                .'middleware off this route.',
                 $request->getMethod(),
                 $route->uri(),
                 ProvidesConditionalValidator::class,
