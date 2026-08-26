@@ -22,13 +22,19 @@ function writeRoute(string $middleware): void
         ->put('/articles/{article}', fn (Article $article): array => ['title' => $article->title]);
 }
 
-it('refuses to guard a route whose strategy cannot answer before the controller', function (): void {
+it('refuses to guard a route whose strategy cannot answer before the controller, naming the route', function (): void {
     $this->withoutExceptionHandling();
 
     writeRoute('conditional:body,required');
 
-    $this->put('/articles/1');
-})->throws(LogicException::class, 'the [body] validator strategy cannot produce a validator before the controller runs');
+    // The message must name the offending route, not just the strategy and
+    // the contract — that is the part telling a developer where to look.
+    expect(fn () => $this->put('/articles/1'))->toThrow(function (LogicException $e): void {
+        expect($e->getMessage())
+            ->toContain('the [body] validator strategy cannot produce a validator before the controller runs')
+            ->toContain('PUT /articles/1');
+    });
+});
 
 it('names the contract a strategy has to implement to be guardable', function (): void {
     $this->withoutExceptionHandling();

@@ -27,7 +27,9 @@ it('leaves every write unguarded when the package is disabled', function (): voi
 
     eligibilityRoutes();
 
-    $this->put('/articles/1')->assertOk();
+    $this->put('/articles/1')
+        ->assertOk()
+        ->assertJson(['title' => 'Hello']);
 });
 
 it('leaves a URI excluded write unguarded', function (): void {
@@ -35,7 +37,9 @@ it('leaves a URI excluded write unguarded', function (): void {
 
     eligibilityRoutes();
 
-    $this->put('/articles/1')->assertOk();
+    $this->put('/articles/1')
+        ->assertOk()
+        ->assertJson(['title' => 'Hello']);
 });
 
 it('leaves a name excluded write unguarded', function (): void {
@@ -43,7 +47,9 @@ it('leaves a name excluded write unguarded', function (): void {
 
     eligibilityRoutes();
 
-    $this->put('/articles/1')->assertOk();
+    $this->put('/articles/1')
+        ->assertOk()
+        ->assertJson(['title' => 'Hello']);
 });
 
 it('guards an unsafe method that the methods config does not list', function (): void {
@@ -111,7 +117,9 @@ it('lets an unguarded write through under kernel global placement', function ():
     Route::middleware(SubstituteBindings::class)
         ->put('/articles/{article}', fn (Article $article): array => ['title' => $article->title]);
 
-    $this->put('/articles/1')->assertOk();
+    $this->put('/articles/1')
+        ->assertOk()
+        ->assertJson(['title' => 'Hello']);
 });
 
 it('refuses an If-Match when conditional runs before route model binding', function (): void {
