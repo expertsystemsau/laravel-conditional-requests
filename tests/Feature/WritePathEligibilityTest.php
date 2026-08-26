@@ -171,13 +171,41 @@ it('refuses an If-Match when conditional runs before route model binding', funct
     $this->put('/articles/1', [], ['If-Match' => '*'])->assertStatus(412);
 });
 
-it('lets an If-None-Match wildcard through when no model can be found', function (): void {
-    // The other side of the same coin: absent-by-default means the create
-    // guard cannot detect a duplicate, so it passes rather than refusing.
+it('refuses an If-None-Match wildcard when conditional runs before route model binding', function (): void {
+    // Amended with the v0.3 write-path sweep. This previously asserted the
+    // create guard passed here, on the reasoning that a misordered guard reads
+    // every resource as absent — which made the misordering far worse than the
+    // README claimed: it did not "stop writes", it turned the route into one
+    // where `If-None-Match: *` overwrote live records. The strategy now reports
+    // an unsubstituted parameter as "cannot tell", and the create guard fails
+    // closed on that.
     Route::middleware(['conditional:model', SubstituteBindings::class])
-        ->put('/articles/{article}', fn (Article $article): array => ['title' => $article->title]);
+        ->put('/articles/{article}', function (Article $article): array {
+            $article->update(['title' => 'Clobbered']);
 
-    $this->put('/articles/1', [], ['If-None-Match' => '*'])->assertOk();
+            return ['title' => $article->title];
+        });
+
+    $this->put('/articles/1', [], ['If-None-Match' => '*'])->assertStatus(412);
+
+    expect(Article::query()->findOrFail(1)->title)->toBe('Hello');
+});
+
+it('refuses an If-None-Match wildcard under kernel global placement', function (): void {
+    config()->set('laravel-conditional-requests.strategy', 'model');
+
+    app(Kernel::class)->pushMiddleware(Conditional::class);
+
+    Route::middleware(SubstituteBindings::class)
+        ->put('/articles/{article}', function (Article $article): array {
+            $article->update(['title' => 'Clobbered']);
+
+            return ['title' => $article->title];
+        });
+
+    $this->put('/articles/1', [], ['If-None-Match' => '*'])->assertStatus(412);
+
+    expect(Article::query()->findOrFail(1)->title)->toBe('Hello');
 });
 
 it('leaves OPTIONS on the read path', function (): void {

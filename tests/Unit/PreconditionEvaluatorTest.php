@@ -147,7 +147,9 @@ it('fails an If-None-Match wildcard when the resource already exists', function 
 });
 
 it('passes an If-None-Match wildcard when the resource does not exist', function (): void {
-    expect((new PreconditionEvaluator)->evaluate(guardedRequest(['If-None-Match' => '*']), null, false))
+    // Amended with the v0.3 write-path sweep: the create guard now turns on the
+    // strategy's own answer to "is the target there", not on a null validator.
+    expect((new PreconditionEvaluator)->evaluate(guardedRequest(['If-None-Match' => '*']), null, false, exists: false))
         ->toBe(PreconditionOutcome::Passed);
 });
 
@@ -179,7 +181,7 @@ it('treats a weak prefixed wildcard as the wildcard on the create guard', functi
 });
 
 it('passes a weak prefixed wildcard create guard when the resource does not exist', function (): void {
-    expect((new PreconditionEvaluator)->evaluate(guardedRequest(['If-None-Match' => 'W/*']), null, false))
+    expect((new PreconditionEvaluator)->evaluate(guardedRequest(['If-None-Match' => 'W/*']), null, false, exists: false))
         ->toBe(PreconditionOutcome::Passed);
 });
 
@@ -261,7 +263,7 @@ it('still treats a blank If-None-Match as absent', function (): void {
 });
 
 it('accepts If-None-Match as a precondition on a required route', function (): void {
-    expect((new PreconditionEvaluator)->evaluate(guardedRequest(['If-None-Match' => '*']), null, true))
+    expect((new PreconditionEvaluator)->evaluate(guardedRequest(['If-None-Match' => '*']), null, true, exists: false))
         ->toBe(PreconditionOutcome::Passed);
 });
 
@@ -306,4 +308,52 @@ it('still evaluates a concrete If-None-Match normally without required', functio
         ->toBe(PreconditionOutcome::Passed)
         ->and($evaluator->evaluate(guardedRequest(['If-None-Match' => '"abc"']), new Validator('abc'), false))
         ->toBe(PreconditionOutcome::Failed);
+});
+
+// --- the create guard and target existence ---
+
+it('refuses an If-None-Match wildcard when the target exists but yields no validator', function (): void {
+    // The record is there and the strategy has nothing to compare. Reading that
+    // null as "absent" let the only precondition meant to stop a second writer
+    // overwrite the first one's row.
+    expect((new PreconditionEvaluator)->evaluate(guardedRequest(['If-None-Match' => '*']), null, false, exists: true))
+        ->toBe(PreconditionOutcome::Failed);
+});
+
+it('refuses an If-None-Match wildcard when the target existence is unknown', function (): void {
+    // Null is "cannot tell" — a guard placed ahead of SubstituteBindings, or
+    // kernel-global placement. It fails closed, because guessing "absent" is
+    // what overwrote live records.
+    expect((new PreconditionEvaluator)->evaluate(guardedRequest(['If-None-Match' => '*']), null, false, exists: null))
+        ->toBe(PreconditionOutcome::Failed);
+});
+
+it('defaults an unknown target existence to a refusal', function (): void {
+    // The parameter's default is the fail-closed answer, so a caller that has
+    // not been taught to supply it cannot reopen the hole by omission.
+    expect((new PreconditionEvaluator)->evaluate(guardedRequest(['If-None-Match' => '*']), null, false))
+        ->toBe(PreconditionOutcome::Failed);
+});
+
+it('still refuses an If-None-Match wildcard against a validator whatever existence says', function (): void {
+    // Both inputs have to agree before a create proceeds; a validator in hand
+    // is a resource that exists, whatever a strategy claims.
+    $evaluator = new PreconditionEvaluator;
+
+    foreach ([true, false, null] as $exists) {
+        expect($evaluator->evaluate(guardedRequest(['If-None-Match' => '*']), new Validator('abc'), false, $exists))
+            ->toBe(PreconditionOutcome::Failed);
+    }
+});
+
+it('leaves the If-Match wildcard turning on the validator alone', function (): void {
+    // §13.1.1's update guard is already fail-closed on a null validator and is
+    // deliberately not rewired: a resource that cannot state a version cannot
+    // satisfy an If-Match, whatever its existence.
+    $evaluator = new PreconditionEvaluator;
+
+    expect($evaluator->evaluate(guardedRequest(['If-Match' => '*']), null, false, exists: true))
+        ->toBe(PreconditionOutcome::Failed)
+        ->and($evaluator->evaluate(guardedRequest(['If-Match' => '*']), new Validator('abc'), false, exists: null))
+        ->toBe(PreconditionOutcome::Passed);
 });

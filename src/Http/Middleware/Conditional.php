@@ -188,6 +188,10 @@ final readonly class Conditional
             return $next($request);
         }
 
+        // Asked before the validator, and only here: the read path never puts
+        // this question to a strategy. It is what keeps "absent" apart from
+        // "present but silent" for the create guard below.
+        $exists = $strategy->targetExists($request);
         $current = $strategy->fromRequest($request);
 
         // Not gated on `required`. Weakness inverts the guard wherever an
@@ -211,7 +215,7 @@ final readonly class Conditional
             ));
         }
 
-        return match ($this->evaluator->evaluate($request, $current, $flags->required)) {
+        return match ($this->evaluator->evaluate($request, $current, $flags->required, $exists)) {
             PreconditionOutcome::Failed => throw new PreconditionFailedException(
                 $this->message(PreconditionFailedException::MESSAGE_KEY),
             ),

@@ -50,27 +50,26 @@ final readonly class PreconditionEvaluator
      * route actually wants. The comparison itself is untouched; what changed is
      * only what counts as having supplied one.
      *
-     * A null $current collapses two states the v0.2 contract cannot tell apart:
-     * the resource is absent, and the resource exists but has no validator the
-     * strategy could derive. The two wildcards read that one state in opposite
-     * directions, and the asymmetry is deliberate:
+     * Both wildcards fail CLOSED, and they read different inputs to do it.
      *
-     *  - `If-Match: *` fails CLOSED. Nothing can be shown to exist, so the
-     *    update guard refuses with 412 and no write happens.
-     *  - `If-None-Match: *` fails OPEN. Nothing can be shown to exist, so the
-     *    create guard passes and the write happens.
+     *  - `If-Match: *` turns on $current. Nothing can be shown to exist, so
+     *    the update guard refuses with 412 and no write happens.
+     *  - `If-None-Match: *` turns on $exists, which the strategy answers
+     *    separately: true, false, or null for "cannot tell". The create guard
+     *    passes only on a definite false.
      *
-     * The second is acceptable, not harmless. A create aimed at a record that
-     * does exist but yields no validator passes the only precondition meant to
-     * stop it, and the first writer's row is silently overwritten — the lost
-     * update this class exists to refuse, arriving through the guard against
-     * it. Closing it means asking the contract "does this resource exist?"
-     * separately from "what is its version?", because a genuinely absent
-     * resource produces the same null and a fail-closed create guard would
-     * refuse every legitimate create. That contract change is out of scope
-     * here, so the asymmetry stands until it lands.
+     * The second used to turn on $current too, and that was the hole. A null
+     * validator collapses three states — the resource is absent, it exists but
+     * yields no validator, and nothing has been routed — and reading the
+     * collapsed null as "absent" let the create guard write over a live
+     * record: the lost update this class exists to refuse, arriving through
+     * the one precondition meant to stop it. $exists keeps the states apart,
+     * so "cannot tell" is now 412 rather than a write.
+     *
+     * @param  bool|null  $exists  whether the target resource is there, or null
+     *                             when the strategy cannot tell
      */
-    public function evaluate(Request $request, ?Validator $current, bool $required): PreconditionOutcome
+    public function evaluate(Request $request, ?Validator $current, bool $required, ?bool $exists = null): PreconditionOutcome
     {
         $ifMatch = $this->sentHeader($request, 'If-Match');
 
@@ -84,7 +83,7 @@ final readonly class PreconditionEvaluator
 
         if ($ifNoneMatch !== null) {
             if ($this->isWildcard($ifNoneMatch)) {
-                return $this->outcome(! $current instanceof Validator);
+                return $this->outcome(! $current instanceof Validator && $exists === false);
             }
 
             return $required

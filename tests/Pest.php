@@ -43,6 +43,11 @@ function fixedRequestTagStrategy(string $tag): RequestValidatorStrategy
             return new Validator($this->tag);
         }
 
+        public function targetExists(Request $request): ?bool
+        {
+            return true;
+        }
+
         public function fromResponse(Request $request, Response $response): ?Validator
         {
             return new Validator($this->tag);

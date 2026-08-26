@@ -124,3 +124,54 @@ it('marks the validator weak when configured to', function (): void {
     expect($weak?->weak)->toBeTrue()
         ->and($weak?->etag)->toBe($strong?->etag);
 });
+
+// --- target existence, the write path's create guard ---
+
+it('reports a bound record as present', function (): void {
+    $request = routedRequest('/articles/1', '/articles/{article}', ['article' => fixtureArticleFor(1)]);
+
+    expect((new ModelStrategy)->targetExists($request))->toBeTrue();
+});
+
+it('reports a bound record that yields no validator as present', function (): void {
+    // The distinction fromRequest() cannot express: the row is there, it just
+    // cannot state a version. Reading it as absent let the create guard write.
+    $request = routedRequest('/articles/1', '/articles/{article}', ['article' => new Article]);
+    $strategy = new ModelStrategy;
+
+    expect($strategy->fromRequest($request))->toBeNull()
+        ->and($strategy->targetExists($request))->toBeTrue();
+});
+
+it('reports a parameter a binder answered null for as absent', function (): void {
+    $request = routedRequest('/articles/999', '/articles/{article}', ['article' => null]);
+
+    expect((new ModelStrategy)->targetExists($request))->toBeFalse();
+});
+
+it('reports a collection route as addressing no record', function (): void {
+    // POST /articles: bound, no parameters, nothing for a create to collide
+    // with. The README documents the create guard passing here.
+    $request = routedRequest('/articles', '/articles');
+
+    expect((new ModelStrategy)->targetExists($request))->toBeFalse();
+});
+
+it('cannot tell whether an unsubstituted parameter exists', function (): void {
+    // Conditional declared ahead of SubstituteBindings. The parameter is still
+    // the raw URI segment, so nothing is known — and "cannot tell" has to fail
+    // the create guard closed rather than read as absent.
+    $request = routedRequest('/articles/1', '/articles/{article}');
+
+    expect((new ModelStrategy)->targetExists($request))->toBeNull();
+});
+
+it('cannot tell whether a target exists before anything has been routed', function (): void {
+    expect((new ModelStrategy)->targetExists(Request::create('/articles/1')))->toBeNull();
+});
+
+it('cannot tell whether a target exists on an unbound route', function (): void {
+    $request = routedRequest('/articles/1', '/articles/{article}', bind: false);
+
+    expect((new ModelStrategy)->targetExists($request))->toBeNull();
+});

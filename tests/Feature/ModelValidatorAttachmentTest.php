@@ -50,6 +50,11 @@ it('does not recompute a validator it already has', function (): void {
             return new Validator('counted');
         }
 
+        public function targetExists(Request $request): ?bool
+        {
+            return true;
+        }
+
         public function fromResponse(Request $request, Response $response): ?Validator
         {
             $this->responseCalls++;
@@ -196,6 +201,11 @@ function decliningStrategy(): RequestValidatorStrategy
     return new class implements RequestValidatorStrategy
     {
         public function fromRequest(Request $request): ?Validator
+        {
+            return null;
+        }
+
+        public function targetExists(Request $request): ?bool
         {
             return null;
         }

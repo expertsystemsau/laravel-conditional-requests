@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use ExpertSystems\ConditionalRequests\Tests\Fixtures\Article;
+use ExpertSystems\ConditionalRequests\Tests\Fixtures\Blind;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Middleware\SubstituteBindings;
 use Illuminate\Support\Facades\Route;
@@ -113,4 +114,41 @@ it('refuses a non wildcard If-None-Match naming the current version', function (
 
     $this->patch('/articles/1', [], ['If-None-Match' => $etag])->assertStatus(412);
     $this->patch('/articles/1', [], ['If-None-Match' => '"other"'])->assertOk();
+});
+
+it('refuses a create over a record that exists but yields no validator', function (): void {
+    // The sharpest fail-open in the create guard: the row is there,
+    // conditionalVersionColumns() is empty so nothing can be compared, and the
+    // one precondition whose entire job is refusing to write over an existing
+    // resource used to pass — overwriting it.
+    Blind::query()->create(['id' => 7, 'title' => 'IMPORTANT-DATA']);
+
+    Route::bind('blind', fn (string $value): ?Blind => Blind::query()->find($value));
+
+    Route::middleware([SubstituteBindings::class, 'conditional:required'])
+        ->put('/blind/{blind}', function (Request $request): array {
+            $existing = $request->route('blind');
+
+            if ($existing instanceof Blind) {
+                $existing->update(['title' => 'OVERWRITTEN']);
+
+                return ['status' => 'updated'];
+            }
+
+            Blind::query()->create(['id' => (int) $request->segment(2), 'title' => 'Created']);
+
+            return ['status' => 'created'];
+        });
+
+    $this->put('/blind/7')->assertStatus(428);
+    $this->put('/blind/7', [], ['If-Match' => '*'])->assertStatus(412);
+    $this->put('/blind/7', [], ['If-None-Match' => '*'])->assertStatus(412);
+
+    expect(Blind::query()->findOrFail(7)->title)->toBe('IMPORTANT-DATA');
+
+    // A genuinely absent record on the same route still creates: the guard
+    // fails closed on "cannot tell", not on every null validator.
+    $this->put('/blind/8', [], ['If-None-Match' => '*'])
+        ->assertOk()
+        ->assertJson(['status' => 'created']);
 });

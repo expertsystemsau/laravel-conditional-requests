@@ -36,4 +36,33 @@ interface RequestValidatorStrategy extends ValidatorStrategy
      * Produce a validator from the request alone, or null when it cannot.
      */
     public function fromRequest(Request $request): ?Validator;
+
+    /**
+     * Whether the resource this request addresses exists, when that can be
+     * determined from the request alone.
+     *
+     * Three answers, and the third is the point of the method:
+     *
+     *  - true — the resource is there.
+     *  - false — the resource is definitely not there.
+     *  - null — this strategy cannot tell.
+     *
+     * fromRequest() returning null collapses those three into one. A record
+     * that exists but yields no validator, a record that is genuinely absent,
+     * and a request nothing has been routed for are indistinguishable from a
+     * null validator, and `If-None-Match: *` — the create guard, whose entire
+     * job is refusing to write over a resource that is already there — used to
+     * read that one null as "absent" and pass. A live record was then silently
+     * overwritten by the only precondition meant to stop it.
+     *
+     * The create guard now writes only on a definite false. That makes null
+     * fail closed with 412, so answer it only when the existence of the target
+     * genuinely cannot be established: a strategy that guesses `false` here
+     * reopens the hole this method exists to close.
+     *
+     * Only the write path asks. Nothing on the read path calls it, and a
+     * strategy is free to answer without touching storage — the question is
+     * about the request's target, not about a query.
+     */
+    public function targetExists(Request $request): ?bool;
 }
