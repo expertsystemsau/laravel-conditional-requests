@@ -131,13 +131,13 @@ Three cases:
 
 **What happens.** A cached entry's policy is destroyed the first time it successfully revalidates. A `public, max-age=60` entry becomes `private` — out of every shared cache — and `no-cache`, so it revalidates on every request from then on.
 
-**You are exposed if** you set `Cache-Control` from middleware declared *outside* `conditional`, on a route using `model`.
+**You are exposed if** a route using `model` sets `Cache-Control` from anywhere that a short-circuited `304` does not reach. That is *every* middleware declared **inside** `conditional`, because on that path none of them runs at all, and any **outside** one that skips a contentless response — Laravel's own `SetCacheHeaders` among them.
 
-**What to do.** Set cache headers from middleware declared **inside** `conditional`. A header already on the response before Symfony marks it not-modified survives, because `setNotModified()` does not strip `Cache-Control`.
+**What to do.** Set the header from middleware declared **outside** `conditional` that sets it *unconditionally* on the way out, or keep a cache-policy route off `model`. Declaring it inside does not work here, however natural that reads next to [H7](#h7): `handle()` returns the short-circuited `304` before it calls `$next($request)`, so nothing after this middleware is entered — [H1](#h1). Inside is the right answer only for a `304` decided *after* the controller ran — `body`, or `model` when `fromRequest()` declined — where `attach()` marks the real response and `setNotModified()` leaves `Cache-Control` alone.
 
 **Why it works this way.** `Conditional::notModified()` builds a fresh `Illuminate\Http\Response`, which carries Symfony's default `Cache-Control: no-cache, private`. Middleware that skips empty responses never applies the application's policy to it — Laravel's own `SetCacheHeaders` returns early for a contentless non-`HEAD`, non-binary, non-streamed response. RFC 9111 §4.3.4 then requires a cache to update its stored headers from the `304`, so the downgrade is permanent.
 
-The nuance, or the entry misleads: middleware that sets headers **unconditionally** on the way out survives regardless of position. It is specifically middleware that skips empty responses that loses them.
+The nuance, or the entry misleads: on a `304` decided **after** the controller ran, middleware that sets headers unconditionally on the way out survives from either position, and only one that skips empty responses loses them. On a **short-circuited** `304` position is not the discriminator at all — an inside middleware never runs, so an unconditional *outside* one is the only thing that can put the header back.
 
 <a id="h7"></a>
 

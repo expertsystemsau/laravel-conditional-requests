@@ -57,7 +57,8 @@ One exception is worth knowing. `ThrottleRequests` **cannot** end up after `cond
 
 ## What must run inside `conditional`
 
-Anything that changes the response body, or sets headers you need on a `304`.
+Anything that changes the response body. Headers you need on a `304` are the
+exception, and the direction is the opposite one — see below.
 
 A validator identifies one specific set of bytes, and this middleware computes it from the bytes it can see, where it sits. Anything that rewrites the body *after* that — an HTML minifier, a CSP-nonce injector, a CSRF token refresher, a debug bar, a response filter of any kind — leaves the tag describing bytes the client never received. Global middleware always run outside route middleware, so a global rewriter is always in that position; a route middleware declared before `conditional` is too.
 
@@ -81,9 +82,20 @@ The ordering is easy to get backwards, so here it is both ways:
 
 Under `model` the ordering does not help, because that tag never described the bytes to begin with: a per-response nonce or token is exactly what [the scoping section](reads.md#what-a-model-derived-tag-is-scoped-to) says has to be folded into the tag by hand, or kept off a conditional route.
 
-A `Cache-Control` policy set from outside `conditional` is the other half of this rule, and its failure is worse than a missing header — a cache adopts what the short-circuited `304` carries instead. That is [H6](hazards.md#h6).
+A `Cache-Control` policy is the exception to everything above, and it inverts
+the rule. Its failure is worse than a missing header — a cache adopts what the
+short-circuited `304` carries instead of keeping what it had. That is
+[H6](hazards.md#h6), and the remedy there is **outside**, not inside: a
+short-circuited `304` returns before `$next($request)`, so a middleware declared
+after `conditional` never runs and cannot set anything at all.
 
-One nuance, or this page misleads: middleware that sets headers **unconditionally** on the way out survives on a `304` from either position. It is specifically middleware that skips empty responses — Laravel's own `SetCacheHeaders` among them — that loses them.
+One nuance, or this page misleads. On a `304` decided **after** the controller
+ran, middleware that sets headers unconditionally on the way out survives from
+either position, and it is specifically middleware that skips empty responses —
+Laravel's own `SetCacheHeaders` among them — that loses them. On a
+**short-circuited** `304` position decides nothing, because only the outside
+middleware runs; an unconditional outside one is the only thing that can put the
+header back.
 
 ## Terminable middleware
 
