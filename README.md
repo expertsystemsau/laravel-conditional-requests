@@ -24,7 +24,7 @@ Most Laravel packages in this space only do the first half, and only via ETag. T
 ## Status
 
 > [!WARNING]
-> **Pre-release — under active development.** The read path and the write path described below both ship and are tested, model-derived validators and the pre-controller `304` short-circuit included. The `Last-Modified` family (`If-Modified-Since`, `If-Unmodified-Since`) and `lock` mode are not implemented yet — they are marked on the [roadmap](#roadmap) below. Nothing is stable until `v1.0.0`.
+> **Pre-release — under active development.** The read path, the write path, and all four conditional headers described below ship and are tested — model-derived validators, the pre-controller `304` short-circuit, `ETag`, and `Last-Modified` included. `lock` mode is not implemented yet; it is marked on the [roadmap](#roadmap) below. Nothing is stable until `v1.0.0`.
 
 ## Requirements
 
@@ -170,7 +170,7 @@ Model-derived validators are **strong**. RFC 9110 §13.1.1 requires strong compa
 > `conditional` must run **after** route model binding. Inside the `api` or `web` middleware group that is already true, since `SubstituteBindings` belongs to both. On a route that has not had its bindings substituted yet — kernel-global placement, or a hand-written middleware list that puts `conditional` first — the strategy finds no record before the controller runs and the request quietly takes the ordinary path: the `ETag` is still attached on the way out, but the controller runs and nothing is saved.
 
 > [!NOTE]
-> `updated_at` is stored to the second by default, so two writes inside the same second produce the same tag. Add a `version` column, or widen the column's precision, on resources that change that fast.
+> `updated_at` is stored to the second by default, so two writes inside the same second produce the same tag. Add a `version` column, or widen the column's precision, on resources that change that fast. The `Last-Modified` header has the same one-second limit and cannot be widened at all — see [Last-Modified and If-Modified-Since](#last-modified-and-if-modified-since) for what the package does about it.
 
 > [!NOTE]
 > A short-circuited `304` cannot carry headers your controller or downstream middleware would have set — an application `Cache-Control`, `Vary`, `Content-Location`, and the like never run on a hit, because nothing that would set them does. RFC 9110 §15.4.5 says a `304` *should* carry them. The long way round — controller runs, `304` decided afterwards — carries them exactly as before; only the pre-controller short-circuit skips them.
@@ -216,12 +216,47 @@ class Article extends Model implements ProvidesConditionalValidator
             return null;
         }
 
-        return new Validator(hash('xxh128', $validator->etag."\0".(string) $request->query('fields')));
+        return new Validator(
+            hash('xxh128', $validator->etag."\0".(string) $request->query('fields')),
+            lastModified: $validator->lastModified,
+        );
     }
 }
 ```
 
+Pass `lastModified` through when you rebuild a validator. It is a separate field from the tag, and a rebuild that forgets it quietly drops the `Last-Modified` header for that model.
+
 The example varies on `?fields=`; the viewer and the tenant fold in exactly the same way — `$request->user()?->getAuthIdentifier()`, a tenant id, an `Accept` header. Anything that is part of *which* representation this is belongs in there.
+
+### Last-Modified and If-Modified-Since
+
+A model-derived validator publishes the record's modification date alongside its tag, so a client can revalidate with either.
+
+```http
+GET /articles/42
+→ 200 OK
+  ETag: "9b1c0e0f6b0a4f9d"
+  Last-Modified: Wed, 26 Aug 2026 12:00:00 GMT
+
+GET /articles/42
+If-Modified-Since: Wed, 26 Aug 2026 12:00:00 GMT
+→ 304 Not Modified          # the controller never ran
+```
+
+The date comes from `updated_at`. A model with no timestamps, a null `UPDATED_AT` column, or an unloaded `updated_at` publishes no date and keeps its tag; override `conditionalLastModifiedColumn()` to point at a different column, or to return `null` to suppress the date for a model entirely. The body-hash strategy never publishes one — it fingerprints content, and has no idea when that content changed.
+
+> [!IMPORTANT]
+> **A record that has just changed publishes no `Last-Modified` until the second it changed in has elapsed.** This is deliberate, and it is the one thing most `Last-Modified` implementations get wrong.
+>
+> An HTTP-date has one-second resolution. A record modified at `12:00:00.700` can only be advertised as `12:00:00` — and if it changes again at `12:00:00.900`, a client echoing `If-Modified-Since: 12:00:00` back would be told `304 Not Modified` while holding a stale representation. The same is true of a plain second-precision column, where both writes store `12:00:00`; widening the column does not help, because the limit is in the header format.
+>
+> RFC 9110 §8.8.2.2 allows a date to be treated as a strong validator only when the server knows the representation did not change twice inside the second it names. That is unknowable while the second is still running and always true once it has finished, so the date is published a moment later. In the meantime the `ETag` — which is derived from the raw column at full precision — keeps validating the resource, which is why the two headers ship together.
+
+> [!NOTE]
+> A `304` carries the `ETag` and no `Last-Modified`: RFC 9110 §15.4.5 requires the tag and wants the date only when there is no tag, and your client keeps the date it stored from the original `200` (RFC 9111 §4.3.4).
+
+> [!NOTE]
+> Set `last_modified => false` in the config to keep the whole family out of the conversation. Responses then carry no date, `If-Modified-Since` can never produce a `304`, and `If-Unmodified-Since` is refused rather than ignored. Attaching a date never changes what a response says about caching — the middleware restores the `Cache-Control` the response already had, so a validator can never be the reason a resource stops being revalidated.
 
 ### Registering your own strategy
 
@@ -377,6 +412,30 @@ Route::put('/articles/{article}', function (Request $request) {
 
 On a collection route such as `POST /articles` there is no bound resource to ask about, so the create guard has nothing to compare and the request proceeds.
 
+### If-Unmodified-Since
+
+The date-based fallback for a client that has a `Last-Modified` and no tag. It is evaluated only when `If-Match` is absent, per RFC 9110 §13.2.2.
+
+```http
+PUT /articles/42
+If-Unmodified-Since: Wed, 26 Aug 2026 12:00:00 GMT
+→ 200 OK                    # unchanged since that date, write applied
+
+PUT /articles/42
+If-Unmodified-Since: Wed, 26 Aug 2026 11:59:59 GMT
+→ 412 Precondition Failed   # it has changed since
+```
+
+It satisfies `required`, so a client that sends it is not answered `428`.
+
+> [!WARNING]
+> **Prefer `If-Match`.** A date is a one-second validator, so two writes inside one second are indistinguishable to it. This package closes that window for its own clients — a date is never published while the second holding the change is still open, so a client echoing back a date we gave it cannot be misled — but a client that invents a date from its own clock has no such guarantee. `If-Match` compares entity tags and has no such window.
+
+> [!IMPORTANT]
+> A resource that publishes no date refuses an `If-Unmodified-Since` with `412` rather than ignoring it. That covers a model with no timestamps, a record that changed within the current second, and `last_modified => false`. A client that sends this header is asking to be refused when the server cannot vouch for the state; proceeding would hand it a guard that silently does nothing.
+
+`If-Modified-Since` is a read-path header and is ignored on a write (§13.1.3), so it neither guards a write nor satisfies `required`.
+
 ### Requirements and caveats for guarded routes
 
 > [!WARNING]
@@ -404,7 +463,7 @@ On a collection route such as `POST /articles` there is no bound resource to ask
 > Setting `weak => true` on a conditional write route is a configuration error and throws a `LogicException`, naming the config key. A weak validator can never satisfy `If-Match`, so the guard is not merely disabled but **inverted**: every client sending the correct token is refused with `412`, and every client sending nothing writes freely, with nothing in either response to say why. The error is raised on the first request that would evaluate an `If-Match` against a weak validator, and on the first guarded request of any kind when the route is flagged `required` — where the pairing is fatal before a client sends anything at all. A write carrying no precondition on a route without `required` is guarded by nothing and still passes. The same `LogicException` covers naming a strategy that cannot produce a validator before the controller runs, such as `conditional:body,required`.
 
 > [!NOTE]
-> `If-Match` is evaluated first, per RFC 9110 §13.2.2; `If-None-Match` is consulted only in its absence. `If-Unmodified-Since` is not implemented yet, which means it does **not** satisfy `required` — a request carrying only that header still gets `428`.
+> The preconditions are evaluated in RFC 9110 §13.2.2 order: `If-Match` first, then `If-Unmodified-Since` in its absence, then `If-None-Match`. A request carrying only `If-Unmodified-Since` therefore satisfies `required` — see [If-Unmodified-Since](#if-unmodified-since) for what it can and cannot promise.
 
 > [!NOTE]
 > `If-Match` closes the window between the client's read and its write, not the window between this check and the controller's own write. Two writes that both pass the guard microseconds apart can still race. `lock` mode, which re-evaluates the precondition inside a transaction holding a row lock, is on the roadmap.
@@ -429,9 +488,9 @@ Their default bodies live in `lang/en/messages.php`; publish it with the `larave
 | `If-None-Match: *` | writes | `412 Precondition Failed` | write proceeds | yes |
 | `If-None-Match` (concrete tag, weak comparison) | writes, without `required` | `412 Precondition Failed` | write proceeds | yes |
 | `If-None-Match` (concrete tag) | writes, when required | `428 Precondition Required` | `428 Precondition Required` | yes |
-| `If-Modified-Since` | reads | `304 Not Modified` | `200 OK` with body | no |
+| `If-Modified-Since` | reads | `304 Not Modified` | `200 OK` with body | yes |
 | `If-Match` | writes | write proceeds | `412 Precondition Failed` | yes |
-| `If-Unmodified-Since` | writes | write proceeds | `412 Precondition Failed` | no |
+| `If-Unmodified-Since` | writes | write proceeds | `412 Precondition Failed` | yes |
 | *(absent)* | writes, when required | — | `428 Precondition Required` | yes |
 
 ## Roadmap
@@ -440,7 +499,7 @@ Their default bodies live in `lang/en/messages.php`; publish it with the `larave
 - [x] Configurable exclusions — methods, status codes, routes, and response sizes
 - [x] `conditional:required` middleware — `If-Match` enforcement with `412` / `428`, on every unsafe method, plus the `If-None-Match: *` create guard
 - [x] Strong and weak ETag generation, with a configurable strategy
-- [ ] `Last-Modified` / `If-Modified-Since` support alongside ETags
+- [x] `Last-Modified` / `If-Modified-Since` support alongside ETags, plus `If-Unmodified-Since` on the write path
 - [x] Model-derived validators, so an ETag comes from the record's version rather than a hash of the rendered body — including the pre-controller `304` short-circuit
 - [ ] Eloquent API Resource and resource collection support
 - [x] Laravel Octane safety, with no validator state leaking between requests

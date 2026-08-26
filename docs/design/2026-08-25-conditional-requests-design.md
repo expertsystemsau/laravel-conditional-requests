@@ -72,7 +72,7 @@ Therefore:
 | `Contracts/RequestValidatorStrategy` | Contract, extends the above. Resolves a `Validator` from the request alone, which is what makes the pre-controller short-circuit possible. Shipped in v0.2; `ModelStrategy` is the only built-in implementation. |
 | `Validators/BodyHashStrategy` | Post-controller. `xxh128` over rendered content. Strong. |
 | `Validators/ModelStrategy` | Pre-controller. From a route-bound model. Strong. |
-| `Preconditions/PreconditionEvaluator` | Our own `If-Match` / `If-None-Match` evaluation for unsafe methods, strong comparison for `If-Match`. |
+| `Preconditions/PreconditionEvaluator` | Our own `If-Match` / `If-Unmodified-Since` / `If-None-Match` evaluation for unsafe methods, strong comparison for `If-Match`. |
 | `Contracts/ProvidesConditionalValidator` | Model-side contract. |
 | `Concerns/HasConditionalValidator` | Default trait implementation from the connection's database name and table prefix, the table, the key, and either a `version` column or `updated_at`. |
 | `Exceptions/PreconditionFailedException` | `HttpException` subclass, 412. |
@@ -130,15 +130,17 @@ if ifMatch present:
     if ifMatch is '*'  → resource exists ? proceed : throw 412
     if no STRONG match against current       → throw 412
 
+# Fallback validator — If-Unmodified-Since   (§13.2.2 step 2)
+elseif ifUnmodifiedSince present and is a valid HTTP-date:
+    resource publishes no date               → throw 412
+    resource modified after that date        → throw 412
+    else                                     → proceed
+
 # Create guard — If-None-Match   (RFC 9110 §13.1.2, MDN "first upload")
 elseif ifNoneMatch present:
     if ifNoneMatch is '*' → resource exists ? throw 412 : proceed
     if any WEAK match against current        → throw 412
     else                                     → proceed
-
-# Fallback validator
-elseif ifUnmodifiedSince present:
-    resource modified since that date        → throw 412
 
 else:
     if required                              → throw 428
@@ -158,6 +160,12 @@ The non-wildcard branch is a correction made in `v0.3`. §13.1.2 applies to unsa
 methods as well as safe ones, and without it a client that sends
 `If-None-Match: "abc"` to a `required` route is told with `428` that it must send
 a precondition it just sent.
+
+The position of the `If-Unmodified-Since` branch is a correction made in `v0.4`.
+§13.2.2 evaluates it at step 2, before `If-None-Match` at step 3, not after it.
+Dates compare at one-second granularity on both sides and equality satisfies the
+condition; a resource that publishes no date fails closed, because a client
+sending the header asked to be refused when the server cannot vouch for the state.
 
 The re-evaluation inside the lock is the point of `lock` mode. Acquiring a lock without re-checking preserves the race.
 
@@ -182,6 +190,7 @@ return [
     'strategy' => 'body',            // body | model
     'hash' => 'xxh128',              // any algo supported by hash()
     'weak' => false,
+    'last_modified' => true,
     'max_response_bytes' => 1_048_576,  // 0 or negative means unlimited
     'methods' => ['GET', 'HEAD'],    // read path eligibility
     'exclude' => [],                 // route names or URI patterns
@@ -205,6 +214,7 @@ The threat model is worth stating, because it is the one case where the default 
 - Empty-body 2xx responses (`204`) get no validator.
 - Multiple ETags in `If-Match` — any strong match passes.
 - Malformed validator headers are ignored, not fatal.
+- **A `Last-Modified` is published only once the second holding the change has elapsed.** HTTP-date has one-second resolution (§5.6.7), so a record modified twice inside one second would otherwise advertise a date that a client can echo back and be told `304` about while holding the earlier of the two. RFC 9110 §8.8.2.2 permits a date validator to be treated as strong only when the server knows the representation did not change twice during the second it names, which is unknowable while that second is still running. The same rule suppresses a future-dated timestamp from a skewed clock. The entity tag, derived from the raw column, keeps validating in the meantime.
 - `Vary` interaction: content negotiation changes the representation and therefore the validator.
 - Error responses (4xx/5xx) never receive a validator.
 - Laravel Octane: no static or container-singleton validator state; everything resolved per request.
@@ -241,7 +251,7 @@ Scope is unchanged; only the sequence moved.
 | `v0.1` | Read path, body hash, `If-None-Match` → 304 — **shipped** |
 | `v0.2` | Model-derived validators, `fromRequest()`, pre-controller short-circuit — **shipped** |
 | `v0.3` | Write path, `If-Match` → 412, `required` → 428, `If-None-Match: *` create guard — **shipped** |
-| `v0.4` | `Last-Modified` / `If-Modified-Since` / `If-Unmodified-Since` |
+| `v0.4` | `Last-Modified` / `If-Modified-Since` / `If-Unmodified-Since` — **shipped** |
 | `v0.5` | `lock` mode with in-transaction re-evaluation |
 | `v1.0` | Documentation, `werk365/etagconditionals` migration guide, API freeze |
 
