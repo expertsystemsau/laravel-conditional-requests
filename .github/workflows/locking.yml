@@ -1,3 +1,24 @@
+# This workflow exists because the `lock` mode's mutual-exclusion guarantee
+# cannot be proved on SQLite at any effort: SQLiteGrammar::compileLock()
+# returns the empty string and SQLite has no row locks. The `tests` workflow
+# covers everything else.
+#
+# Cost, per push and per pull request:
+#   - 2 jobs beyond the 24 in `tests`.
+#   - Each pulls one database service image (mysql:8.4 ~600 MB,
+#     postgres:17 ~430 MB) and waits on its health check before PHP starts.
+#   - One `composer update` and one `composer test:lock` per job.
+#   - One PHP version only, 8.3. This suite tests database behaviour, not PHP
+#     behaviour, and running it across three PHP versions would triple the
+#     bill for no additional coverage.
+#
+# On a public repository the runner minutes are free. On a private one this is
+# roughly two extra runner-minutes per push, plus image pull time.
+#
+# Two jobs rather than one matrix job with two services: GitHub Actions has no
+# `if:` on a `services:` block, so a matrix would start both databases on every
+# leg and wait on both health checks while using one.
+
 name: locking
 
 on:
@@ -15,19 +36,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  contention:
+  mysql:
     runs-on: ubuntu-latest
 
-    name: row locks - ${{ matrix.driver }}
-
-    strategy:
-      fail-fast: false
-      matrix:
-        driver: [mysql, pgsql]
+    name: row locks - mysql
 
     services:
       mysql:
-        image: mysql:8.4
+        image: mysql@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb # mysql:8.4
         env:
           MYSQL_ROOT_PASSWORD: secret
           MYSQL_DATABASE: conditional_requests
@@ -35,19 +51,6 @@ jobs:
           - 3306:3306
         options: >-
           --health-cmd="mysqladmin ping -psecret"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=10
-
-      postgres:
-        image: postgres:17
-        env:
-          POSTGRES_PASSWORD: secret
-          POSTGRES_DB: conditional_requests
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd=pg_isready
           --health-interval=10s
           --health-timeout=5s
           --health-retries=10
@@ -72,15 +75,72 @@ jobs:
 
       - name: Row lock contention
         env:
-          CONDITIONAL_LOCK_DRIVER: ${{ matrix.driver }}
+          CONDITIONAL_LOCK_DRIVER: mysql
           CONDITIONAL_LOCK_HOST: 127.0.0.1
-          CONDITIONAL_LOCK_PORT: ${{ matrix.driver == 'pgsql' && '5432' || '3306' }}
+          CONDITIONAL_LOCK_PORT: '3306'
           CONDITIONAL_LOCK_DATABASE: conditional_requests
-          CONDITIONAL_LOCK_USERNAME: ${{ matrix.driver == 'pgsql' && 'postgres' || 'root' }}
+          CONDITIONAL_LOCK_USERNAME: root
           CONDITIONAL_LOCK_PASSWORD: secret
         # A gated suite that silently skips in CI is exactly as useless as no
         # suite, so the job fails if it did not actually run. pipefail keeps the
-        # tee from swallowing a genuine test failure.
+        # tee from swallowing a genuine test failure, and the grep reads the
+        # output of the run that just happened rather than a second one.
+        run: |
+          set -o pipefail
+          composer test:lock 2>&1 | tee lock.log
+          if grep -qi 'skipped' lock.log; then
+            echo "The contention suite skipped — the gate did not see its environment."
+            exit 1
+          fi
+
+  pgsql:
+    runs-on: ubuntu-latest
+
+    name: row locks - pgsql
+
+    services:
+      postgres:
+        image: postgres@sha256:0b657ff48d7f76a1e907f381b1693eb4f2bf54c1d2df4feb6743d7dc601768dd # postgres:17
+        env:
+          POSTGRES_PASSWORD: secret
+          POSTGRES_DB: conditional_requests
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd=pg_isready
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Kept byte-identical to the mysql job's PHP setup, extensions included:
+      # both drivers are cheap to install and identical setup avoids a class of
+      # drift between the two jobs.
+      - name: Setup PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
+        with:
+          php-version: 8.3
+          extensions: dom, curl, libxml, mbstring, zip, fileinfo, sqlite, pdo_sqlite, pdo_mysql, pdo_pgsql, bcmath, intl
+          ini-values: error_reporting=E_ALL
+          tools: composer:v2
+          coverage: none
+
+      - name: Install dependencies
+        run: |
+          composer update --prefer-dist --no-interaction --no-progress --no-scripts
+          composer run prepare
+
+      - name: Row lock contention
+        env:
+          CONDITIONAL_LOCK_DRIVER: pgsql
+          CONDITIONAL_LOCK_HOST: 127.0.0.1
+          CONDITIONAL_LOCK_PORT: '5432'
+          CONDITIONAL_LOCK_DATABASE: conditional_requests
+          CONDITIONAL_LOCK_USERNAME: postgres
+          CONDITIONAL_LOCK_PASSWORD: secret
         run: |
           set -o pipefail
           composer test:lock 2>&1 | tee lock.log

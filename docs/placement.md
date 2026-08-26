@@ -21,7 +21,7 @@ Route::middleware(['auth:sanctum', 'conditional:model'])->group(function (): voi
 });
 ```
 
-`SubstituteBindings` sits at index 10 on Laravel's `$middlewarePriority` list and `conditional` is not on that list at all, so the bindings are always substituted before `conditional` runs inside a group. That is structural rather than lucky: priority-listed middleware are sorted ahead of unlisted ones regardless of the order you wrote them in. The model resolves, and the pre-controller short-circuit is available.
+`SubstituteBindings` is on Laravel's `$middlewarePriority` list and `conditional` is not, so inside a group the bindings are substituted before `conditional` runs. That is structural rather than lucky: `SortedMiddleware` reorders the priority entries among themselves and leaves an unlisted one where the route put it, so as long as `conditional` is written after the group's own middleware the model has resolved by the time it runs. The model resolves, and the pre-controller short-circuit is available.
 
 ## Kernel-global placement
 
@@ -51,7 +51,7 @@ One thing global placement gets right, and route placement never needs: `Conditi
 
 On the read path a wrong ordering costs the compute saving. On the **write** path it stops writes: `conditional:required` that cannot see the record refuses every `If-Match` with `412`, and every `If-None-Match: *` too. See [the caveats for guarded routes](writes.md#requirements-and-caveats-for-guarded-routes).
 
-One exception is worth knowing. `ThrottleRequests` **cannot** end up after `conditional` in a way that matters, because it is priority index 7 and the short-circuit needs the bindings at index 10 — so throttling is always already outside it. A custom limiter that is not on the priority list has no such protection.
+One exception is worth knowing. `ThrottleRequests` **cannot** end up after `conditional` in a way that matters: it is sorted ahead of `SubstituteBindings` on the priority list, and the short-circuit needs the bindings — so any arrangement in which the short-circuit can fire is one where throttling has already run. A custom limiter that is not on the priority list has no such protection.
 
 ## What must run inside `conditional`
 

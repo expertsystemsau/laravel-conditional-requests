@@ -57,7 +57,7 @@ Two entry points into this hazard are closed rather than left to you, and the sc
 
 What remains is a client that legitimately obtained a tag and later lost access. That is inherent.
 
-`ThrottleRequests` specifically **cannot** be bypassed this way. It sits at index 7 on Laravel's `$middlewarePriority` list and `SubstituteBindings` at index 10; the short-circuit needs the bindings, so throttling is always already outside `conditional`. A *custom* limiter that is not on the priority list has no such protection.
+`ThrottleRequests` specifically **cannot** be bypassed this way, and the reason is worth knowing. `SortedMiddleware` reorders priority middleware among themselves and leaves a non-priority entry such as `conditional` where the route put it — and on Laravel's `$middlewarePriority` list `ThrottleRequests` is sorted ahead of `SubstituteBindings`. The short-circuit needs the bindings, so any arrangement in which it can fire is one where throttling has already run. A *custom* limiter that is not on the priority list has no such protection.
 
 Verified by `tests/Feature/AuthorizationOrderingTest.php`, which proves both the `403`-before-`conditional` ordering and that a wildcard, a weak-form wildcard, and a date each reach authorization.
 
