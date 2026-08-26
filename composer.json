@@ -101,6 +101,9 @@
         "test:unit": [
             "vendor/bin/pest --parallel"
         ],
+        "test:lock": [
+            "@php vendor/bin/pest --filter=RowLockContentionTest"
+        ],
         "test": [
             "@analyse",
             "@lint:check",
