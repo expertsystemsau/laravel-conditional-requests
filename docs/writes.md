@@ -2,7 +2,7 @@
 
 ## The short version
 
-<!-- Task 5 -->
+`If-Match` is how a client states which version of a resource it believes it is modifying, so a write that would clobber someone else's is refused with `412` instead of applied. The guard covers **every** unsafe method — `POST`, `PUT`, `PATCH`, `DELETE` — and not just `PATCH`, because MDN's canonical mid-air-collision example is a wiki save over `POST`. The `required` flag is what stops a client opting out of the whole thing by omitting the header: a write carrying no precondition is answered `428 Precondition Required`. And the check-then-write race between the guard and your controller is real, small, and closed by the [`lock`](#closing-the-race--lock) flag and nothing else.
 
 ## Requiring a precondition — `428`
 
@@ -31,7 +31,7 @@ PATCH /articles/42
 
 The guard applies to **every** unsafe method — `POST`, `PUT`, `PATCH`, and `DELETE`. MDN's canonical mid-air-collision example is a wiki save over `POST`, so restricting it to `PATCH` would miss the documented case.
 
-`If-Match` uses **strong** comparison, as RFC 9110 §13.1.1 requires: a `W/`-prefixed token never satisfies it, and neither does a weak validator on the server side. That includes `W/*`, which is not a weak wildcard but a malformed field value — the wildcard is a grammar alternative to the tag list rather than an entity tag, so there is nothing for the prefix to attach to, and a malformed `If-Match` fails closed with `412`. On `If-None-Match` the same token *is* read as the wildcard, matching Symfony, because there that is the fail-closed reading; the two headers differ because the safe answer differs. None of this is configurable — see the caveat below.
+`If-Match` uses **strong** comparison, as RFC 9110 §13.1.1 requires: a `W/`-prefixed token never satisfies it, and neither does a weak validator on the server side. That includes `W/*`, which is not a weak wildcard but a malformed field value — the wildcard is a grammar alternative to the tag list rather than an entity tag, so there is nothing for the prefix to attach to, and a malformed `If-Match` fails closed with `412`. A blank `If-Match` is the same state: the header is present and names zero valid members, so it is `412` rather than treated as absent. On `If-None-Match` the same `W/*` token *is* read as the wildcard, matching Symfony, because there that is the fail-closed reading; the two headers differ because the safe answer differs. None of this is configurable — see the caveats below.
 
 ## Guarding a create — `If-None-Match: *`
 
@@ -93,7 +93,7 @@ If-Unmodified-Since: Wed, 26 Aug 2026 11:59:59 GMT
 It satisfies `required`, so a client that sends it is not answered `428`.
 
 > [!WARNING]
-> **Prefer `If-Match`.** A date is a one-second validator, so two writes inside one second are indistinguishable to it. This package closes that window for its own clients — a date is never published while the second holding the change is still open, so a client echoing back a date we gave it cannot be misled — but a client that invents a date from its own clock has no such guarantee. `If-Match` compares entity tags and has no such window.
+> **Prefer `If-Match`.** A date is a one-second validator, so two writes inside one second are indistinguishable to it. This package closes that window for its own clients — a date is never published while the second holding the change is still open, so a client echoing back a date we gave it cannot be misled — but a client that invents a date from its own clock has no such guarantee. `If-Match` compares entity tags and has no such window. See [H17](hazards.md#h17).
 
 > [!IMPORTANT]
 > A resource that publishes no date refuses an `If-Unmodified-Since` with `412` rather than ignoring it. That covers a model with no timestamps, a record that changed within the current second, and `last_modified => false`. A client that sends this header is asking to be refused when the server cannot vouch for the state; proceeding would hand it a guard that silently does nothing.
@@ -101,7 +101,7 @@ It satisfies `required`, so a client that sends it is not answered `428`.
 > [!IMPORTANT]
 > **Only the three formats RFC 9110 §5.6.7 defines are HTTP-dates**: IMF-fixdate (`Wed, 26 Aug 2026 12:00:00 GMT`), the obsolete RFC 850 form, and asctime (`Wed Aug 26 12:00:00 2026`, with no zone). Anything else — `x`, `now`, `tomorrow`, `+1 day`, an empty template placeholder — is ignored per §13.1.4, exactly as if the header had not been sent, so it neither guards a write nor satisfies `required` on a route that demands one. PHP's `strtotime()` parses all of those to real timestamps; this package does not use it here, because a value that resolves to "now" would satisfy every precondition it was asked about and silently turn the guard into a no-op.
 
-`If-Modified-Since` is a read-path header and is ignored on a write (§13.1.3), so it neither guards a write nor satisfies `required`.
+`If-Modified-Since` is a read-path header and is ignored on a write (§13.1.3), so it neither guards a write nor satisfies `required`. The date these guards compare against is the one [`reads.md`](reads.md#last-modified-and-if-modified-since) publishes.
 
 ## Closing the race — `lock`
 
@@ -122,7 +122,7 @@ Your controller is handed the freshly locked instance, not the one route-model b
 
 ### What `lock` costs
 
-`lock` is off unless you ask for it, per route, and this is why:
+`lock` is off unless you ask for it, per route, and this is why. The full account is [H9](hazards.md#h9); the bullets are repeated here because you are about to turn the flag on and should not be able to do that without reading them.
 
 - **Your controller runs inside a transaction.** Everything it does is in the same unit of work. If it opens its own transaction, Laravel savepoints it and that works fine.
 - **A job dispatched inside your controller runs before the commit.** This is Laravel's ordinary behaviour inside any transaction and this package cannot change it. Use `dispatch($job)->afterCommit()`, or set `after_commit => true` on the queue connection.
@@ -131,6 +131,9 @@ Your controller is handed the freshly locked instance, not the one route-model b
 - **Only the target row is locked, on only that record's connection.** Related rows your controller writes, and writes it makes through a different connection, are outside both.
 - **An outer transaction takes ownership of the lock.** If a transaction is already open on that connection when the middleware runs — an application-level wrapper around the request, or a test's own `DatabaseTransactions` — the transaction opened here is a savepoint inside it. The row stays locked until *that* transaction commits, not until this one does, and `lock_timeout` is not applied at all: bounding the wait would mean retuning a transaction this package did not open, and on PostgreSQL `SET LOCAL` would outlive the savepoint and go on bounding every later statement in it. The re-read, the `FOR UPDATE`, and the second evaluation happen exactly as they otherwise would.
 - **A `503` means the row was busy.** If the lock cannot be taken within `lock_timeout` seconds the request is answered `503 Service Unavailable` with a `Retry-After`, and nothing is written. Catch `ExpertSystems\ConditionalRequests\Exceptions\LockTimeoutException` in your handler to answer differently. On SQL Server there is no such bound unless you set one on the connection yourself — see [`lock_timeout`](#lock_timeout) — so a guarded write there waits for as long as the competing transaction holds the row.
+
+> [!WARNING]
+> `lock` needs a database that implements row locking. **On SQLite it does not lock at all** — see [H10](hazards.md#h10).
 
 ### `lock_timeout`
 
@@ -148,29 +151,84 @@ Set `0` to leave your server's own setting alone — but note that PostgreSQL's 
 
 `lock` has nothing to hold on a create: there is no row yet. A `POST` to a collection under `conditional:required,lock` behaves exactly as it does under `conditional:required` — `If-None-Match: *` guards it and no transaction is opened. Back that up with a unique constraint; a package cannot.
 
-> [!WARNING]
-> `lock` needs a database that implements row locking. On MySQL, MariaDB, and PostgreSQL it does what it says. On SQL Server it locks and re-evaluates correctly, but `lock_timeout` is not applied — the wait is unbounded unless you bound it yourself. **On SQLite it does not lock at all**: `lockForUpdate()` compiles to nothing there, so the re-read and the re-evaluation still happen and still catch a committed competitor, but there is no lock and the window between the re-read and the write is left open.
-
 ### Wanting a different lock
 
-<!-- Task 5 -->
+`ModelStrategy::lockingQuery()` is `@internal` and `ModelStrategy` is `final readonly`, so there is nothing to override. The supported route is decoration: implement `LockableValidatorStrategy` yourself, delegate everything you do not want to change, and write your own locking read.
+
+```php
+use ExpertSystems\ConditionalRequests\Contracts\LockableValidatorStrategy;
+use ExpertSystems\ConditionalRequests\Validators\ModelStrategy;
+use ExpertSystems\ConditionalRequests\Validators\Validator;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Http\Request;
+use Symfony\Component\HttpFoundation\Response;
+
+final readonly class SharedLockStrategy implements LockableValidatorStrategy
+{
+    public function __construct(private ModelStrategy $inner = new ModelStrategy) {}
+
+    public function fromRequest(Request $request): ?Validator
+    {
+        return $this->inner->fromRequest($request);
+    }
+
+    public function fromResponse(Request $request, Response $response): ?Validator
+    {
+        return $this->inner->fromResponse($request, $response);
+    }
+
+    public function targetExists(Request $request): ?bool
+    {
+        return $this->inner->targetExists($request);
+    }
+
+    public function lockTarget(Request $request): ?Model
+    {
+        return $this->inner->lockTarget($request);
+    }
+
+    public function lockAndRefresh(Request $request, Model $target): ?Model
+    {
+        // Your own locking read here. Whatever it returns must also be what
+        // fromRequest() answers from afterwards — rebind the route parameter,
+        // exactly as ModelStrategy::lockAndRefresh() does — or the second
+        // evaluation reads the same stale record as the first.
+    }
+}
+```
+
+Register it and name it as a flag exactly like a built-in one:
+
+```php
+public function boot(ConditionalRequests $conditional): void
+{
+    $conditional->extend('shared', fn (): ValidatorStrategy => new SharedLockStrategy);
+}
+```
+
+```php
+Route::patch('/articles/{article}', UpdateArticle::class)
+    ->middleware('conditional:shared,required,lock');
+```
+
+This is an extension point, not a recommendation. **A shared lock is a weaker guarantee wearing the same flag**: it does not stop another writer taking an exclusive lock the moment you release, so the window `lock` exists to close is only narrowed rather than shut.
 
 ## Requirements and caveats for guarded routes
 
 > [!WARNING]
-> A **write** route that binds more than one record implementing `ProvidesConditionalValidator` is a configuration error and throws a `LogicException`, naming the route and the candidate parameters. On a read the first-wins rule above is merely imprecise; on a write it inverts the guard. `PATCH /articles/{article}/comments/{comment}` guards the *article* while the controller writes the *comment* — so the client that correctly sends the comment's tag is refused with `412`, and the write lands only when it sends the tag of a record it is not touching. Implement the contract on the record the route represents and not on the others, or take the conditional middleware off the route. Folding the other record in by overriding `conditionalValidator()` is the *read*-path remedy and does not clear this error — the count is of records implementing the contract, not of validators produced. The read path is unaffected and keeps first-wins.
+> A **write** route that binds more than one record implementing `ProvidesConditionalValidator` is a configuration error and throws a `LogicException`, naming the route and the candidate parameters. On a read the [first-wins rule](hazards.md#h4) is merely imprecise; on a write it inverts the guard. `PATCH /articles/{article}/comments/{comment}` guards the *article* while the controller writes the *comment* — so the client that correctly sends the comment's tag is refused with `412`, and the write lands only when it sends the tag of a record it is not touching. Implement the contract on the record the route represents and not on the others, or take the conditional middleware off the route. Folding the other record in by overriding `conditionalValidator()` is the *read*-path remedy and does not clear this error — the count is of records implementing the contract, not of validators produced. The read path is unaffected and keeps first-wins.
 
 > [!IMPORTANT]
 > A precondition is never silently discarded. The guard needs a strategy that can produce the current validator *before* the controller runs, and the default strategy — `body` — cannot: it describes a response that does not exist yet. A write to such a route carrying an `If-Match` or an `If-None-Match` is therefore refused with `412`, because the client asked for a guarantee the route cannot provide and answering `200` would tell it the check had passed. A write carrying no precondition still passes straight through, so the guard stays opt-in and `Route::resource(...)->middleware('conditional')` keeps working for every client that sends nothing. To actually guard those writes, name a strategy that can answer — `conditional:model`, or `conditional:required`. The refusal applies to **route** and **group** placement, where the route is resolved and the strategy named on it is the one that will be asked. A **kernel-global** instance runs ahead of the router, cannot see the route's flags, and defers instead: it passes the write on so the route's own `conditional` — `required` or `model` — decides. Registering `conditional` globally for read-path `ETag`s therefore does not break the guarded write routes underneath it, but it also adds no write guard of its own.
 
 > [!IMPORTANT]
-> `conditional:required` must run **after** `SubstituteBindings`, and its model must produce a validator. Inside the `api` or `web` middleware group the ordering is already right. Get it wrong — kernel-global placement, or a hand-written list that puts `conditional` first — and the guard cannot see the record at all: every `If-Match` is refused with `412`, and so is every `If-None-Match: *`, because a strategy that cannot tell whether the target exists fails the create guard closed. On the read path a wrong ordering only costs the compute saving; on the write path it stops writes.
+> `conditional:required` must run **after** `SubstituteBindings`, and its model must produce a validator. Inside the `api` or `web` middleware group the ordering is already right. Get it wrong — kernel-global placement, or a hand-written list that puts `conditional` first — and the guard cannot see the record at all: every `If-Match` is refused with `412`, and so is every `If-None-Match: *`, because a strategy that cannot tell whether the target exists fails the create guard closed. **On the read path a wrong ordering only costs the compute saving; on the write path it stops writes.** See [`placement.md`](placement.md#what-must-run-before-conditional).
 
 > [!IMPORTANT]
 > `enabled => false` is not only a caching kill switch. The write path checks it first, so turning it off removes every lost-update guard in the application at the same time: a `conditional:required` route stops answering `428`, stops refusing a stale `If-Match` with `412`, and applies the write. Flipping it while debugging a caching problem quietly reopens the mid-air collision it was never about. `exclude` does the same thing for the routes it matches, and is the narrower tool.
 
 > [!IMPORTANT]
-> Under kernel-global placement only half of `exclude` can suppress the write guard. The decision has to precede the controller, and nothing has been routed at that point, so `Request::routeIs()` answers false for every pattern: a **route-name** exclusion such as `admin.*` is silently ignored on the write path there. **URI** patterns such as `internal/*` still work, as does `enabled => false`. Under route or group placement — the ordering the section above already requires — both halves work as documented.
+> Under kernel-global placement only half of `exclude` can suppress the write guard. The decision has to precede the controller, and nothing has been routed at that point, so `Request::routeIs()` answers false for every pattern: a **route-name** exclusion such as `admin.*` is silently ignored on the write path there. **URI** patterns such as `internal/*` still work, as does `enabled => false`. Under route or group placement — the ordering the caveat above already requires — both halves work as documented. See [H12](hazards.md#h12).
 
 > [!IMPORTANT]
 > A model with no `version` column and no timestamps produces no validator, so it can satisfy no precondition: `If-Match: *` returns `412` every time, and so does `If-None-Match: *` — the record exists, and the create guard refuses to write over it. Add a `version` column or enable timestamps — the same rule the read path already needs.
