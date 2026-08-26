@@ -96,6 +96,25 @@ final readonly class PreconditionEvaluator
     }
 
     /**
+     * Whether the client supplied a precondition this class would evaluate.
+     *
+     * The two field values are read exactly as evaluate() reads them, so the
+     * answer cannot drift from what evaluation would have done with them: an
+     * If-Match counts the moment the header is present, blank included, and an
+     * If-None-Match counts only when it names something.
+     *
+     * The write path asks this when it has established that it cannot evaluate
+     * a precondition at all — no strategy can produce the current validator
+     * before the controller runs. A client that sent one asked for a guarantee
+     * that cannot be given, and is refused rather than quietly written.
+     */
+    public function supplied(Request $request): bool
+    {
+        return $this->sentHeader($request, 'If-Match') !== null
+            || $this->header($request, 'If-None-Match') !== null;
+    }
+
+    /**
      * Strong comparison of a field value against the current validator, per
      * RFC 9110 §13.1.1.
      */

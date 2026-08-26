@@ -72,14 +72,19 @@ it('does not put an unsafe method on the read path by listing it', function (): 
         ->assertHeaderMissing('ETag');
 });
 
-it('leaves a write on a strategy that cannot answer completely untouched', function (): void {
+it('leaves an unconditional write on a strategy that cannot answer completely untouched', function (): void {
     // The pass-through that keeps a plain `conditional` route behaving exactly
     // as it did before v0.3. The default strategy is "body", which describes a
-    // response that does not exist yet, so the guard has nothing to compare and
-    // the write proceeds — stale If-Match and all. The controller counter is
-    // the assertion that matters: 200 alone is also what a 412, a 428 or a 500
-    // would leave behind if this branch stopped being a pass-through, and the
-    // suite would not notice.
+    // response that does not exist yet, so the guard has nothing to compare —
+    // and a client that asked for nothing is given the v0.2 behaviour. The
+    // controller counter is the assertion that matters: 200 alone is also what
+    // a 412, a 428 or a 500 would leave behind if this branch stopped being a
+    // pass-through, and the suite would not notice.
+    //
+    // Amended with the v0.3 write-path sweep: this previously sent a stale
+    // If-Match here and asserted the write applied. See the two tests below —
+    // silently discarding a precondition is the failure this package exists to
+    // prevent, so that half moved rather than being dropped.
     $runs = 0;
 
     Route::middleware([SubstituteBindings::class, 'conditional'])
@@ -89,11 +94,45 @@ it('leaves a write on a strategy that cannot answer completely untouched', funct
             return ['title' => $article->title];
         });
 
-    $this->post('/articles/1', [], ['If-Match' => '"stale-tag"'])
+    $this->post('/articles/1')
         ->assertOk()
         ->assertJson(['title' => 'Hello']);
 
     expect($runs)->toBe(1);
+});
+
+it('refuses a precondition a strategy cannot evaluate rather than discarding it', function (): void {
+    // `Route::resource(...)->middleware('conditional')` is the natural thing to
+    // write, "body" is the default strategy, and a client sending a correct
+    // optimistic-concurrency header used to get a 200 with no signal at all.
+    // The route looked guarded and was not.
+    $runs = 0;
+
+    Route::middleware([SubstituteBindings::class, 'conditional'])
+        ->patch('/articles/{article}', function (Article $article) use (&$runs): array {
+            $runs++;
+            $article->update(['title' => 'Clobbered']);
+
+            return ['title' => $article->title];
+        });
+
+    foreach ([['If-Match' => '"stale-tag"'], ['If-Match' => '*'], ['If-None-Match' => '*']] as $headers) {
+        $this->patch('/articles/1', [], $headers)->assertStatus(412);
+    }
+
+    expect($runs)->toBe(0)
+        ->and(Article::query()->findOrFail(1)->title)->toBe('Hello');
+});
+
+it('refuses a precondition on an excluded strategy write route only when one is sent', function (): void {
+    // The refusal is per-request, not per-route: the guard stays opt-in, so an
+    // unconditional write to the same route still passes through.
+    Route::middleware([SubstituteBindings::class, 'conditional:body'])
+        ->put('/articles/{article}', fn (Article $article): array => ['title' => $article->title]);
+
+    $this->put('/articles/1', [], ['If-Match' => '"anything"'])->assertStatus(412);
+    $this->put('/articles/1', [], ['If-None-Match' => '   '])->assertOk();
+    $this->put('/articles/1')->assertOk();
 });
 
 it('refuses an If-Match rather than erroring under kernel global placement', function (): void {

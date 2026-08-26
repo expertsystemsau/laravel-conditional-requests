@@ -380,6 +380,9 @@ On a collection route such as `POST /articles` there is no bound resource to ask
 ### Requirements and caveats for guarded routes
 
 > [!IMPORTANT]
+> A precondition is never silently discarded. The guard needs a strategy that can produce the current validator *before* the controller runs, and the default strategy — `body` — cannot: it describes a response that does not exist yet. A write to such a route carrying an `If-Match` or an `If-None-Match` is therefore refused with `412`, because the client asked for a guarantee the route cannot provide and answering `200` would tell it the check had passed. A write carrying no precondition still passes straight through, so the guard stays opt-in and `Route::resource(...)->middleware('conditional')` keeps working for every client that sends nothing. To actually guard those writes, name a strategy that can answer — `conditional:model`, or `conditional:required`.
+
+> [!IMPORTANT]
 > `conditional:required` must run **after** `SubstituteBindings`, and its model must produce a validator. Inside the `api` or `web` middleware group the ordering is already right. Get it wrong — kernel-global placement, or a hand-written list that puts `conditional` first — and the guard finds no record, treats every resource as absent, and refuses **every** `If-Match` with `412`. On the read path a wrong ordering only costs the compute saving; on the write path it stops writes.
 
 > [!IMPORTANT]

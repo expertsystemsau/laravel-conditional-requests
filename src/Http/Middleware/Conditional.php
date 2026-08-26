@@ -169,9 +169,22 @@ final readonly class Conditional
             }
 
             // A body hash describes a response that does not exist yet, so
-            // there is nothing to compare and nothing this path can guard. The
-            // request passes through unchanged rather than failing every
-            // precondition against a validator that is permanently null.
+            // there is nothing to compare and nothing this path can guard.
+            //
+            // A request that sent no precondition passes through unchanged —
+            // the guard is opt-in, and `body` is the default strategy, so a
+            // plain `conditional` write route has to keep behaving as it did.
+            // A request that did send one cannot: it asked for a guarantee
+            // this route cannot provide, and discarding the header silently is
+            // the exact failure this package exists to prevent — the route
+            // looks guarded, answers 200, and the client believes its
+            // optimistic-concurrency check was honoured. Fail closed instead.
+            if ($this->evaluator->supplied($request)) {
+                throw new PreconditionFailedException(
+                    $this->message(PreconditionFailedException::MESSAGE_KEY),
+                );
+            }
+
             return $next($request);
         }
 
