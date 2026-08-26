@@ -7,21 +7,27 @@ namespace ExpertSystems\ConditionalRequests\Http\Middleware;
 use Closure;
 use DateTimeImmutable;
 use ExpertSystems\ConditionalRequests\ConditionalRequests;
+use ExpertSystems\ConditionalRequests\Contracts\LockableValidatorStrategy;
 use ExpertSystems\ConditionalRequests\Contracts\RequestValidatorStrategy;
 use ExpertSystems\ConditionalRequests\Contracts\ValidatorStrategy;
+use ExpertSystems\ConditionalRequests\Exceptions\LockTimeoutException;
 use ExpertSystems\ConditionalRequests\Exceptions\PreconditionFailedException;
 use ExpertSystems\ConditionalRequests\Exceptions\PreconditionRequiredException;
+use ExpertSystems\ConditionalRequests\Locking\LockWait;
 use ExpertSystems\ConditionalRequests\Preconditions\PreconditionEvaluator;
 use ExpertSystems\ConditionalRequests\Preconditions\PreconditionOutcome;
 use ExpertSystems\ConditionalRequests\Validators\Validator;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Contracts\Translation\Translator;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response as IlluminateResponse;
 use LogicException;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpFoundation\StreamedResponse;
+use Symfony\Component\HttpKernel\Exception\HttpException;
+use Throwable;
 
 /**
  * Handles RFC 9110 conditional requests for a route.
@@ -33,6 +39,7 @@ final readonly class Conditional
         private Repository $config,
         private PreconditionEvaluator $evaluator,
         private Translator $translator,
+        private LockWait $lockWait,
     ) {}
 
     /**
@@ -156,17 +163,17 @@ final readonly class Conditional
         $name = $this->strategyName($flags);
         $strategy = $this->registry->strategy($name);
 
+        // Checked ahead of the request-derived guard below because
+        // LockableValidatorStrategy extends RequestValidatorStrategy: a `lock`
+        // route whose strategy is neither fails both, and this is the error
+        // that names everything wrong with it in one pass.
+        if ($flags->lock && ! $strategy instanceof LockableValidatorStrategy) {
+            throw $this->lockableStrategyError($request, $name);
+        }
+
         if (! $strategy instanceof RequestValidatorStrategy) {
             if ($flags->required) {
-                throw new LogicException(sprintf(
-                    '[%s] is guarded by the conditional `required` flag, but the [%s] validator strategy '
-                    .'cannot produce a validator before the controller runs, so every guarded write would '
-                    .'be refused with 412. Drop the explicit strategy flag — `required` already implies '
-                    .'`model` — or name a strategy implementing %s.',
-                    $this->label($request),
-                    $name,
-                    RequestValidatorStrategy::class,
-                ));
+                throw $this->guardStrategyError($request, $name);
             }
 
             // A body hash describes a response that does not exist yet, so
@@ -230,15 +237,176 @@ final readonly class Conditional
             ));
         }
 
-        return match ($this->evaluator->evaluate($request, $current, $flags->required, $exists)) {
-            PreconditionOutcome::Failed => throw new PreconditionFailedException(
+        // Evaluated here as well as under the lock, so a request that is
+        // already doomed is refused without opening a transaction and without
+        // queueing behind a row lock. The evaluation that is load-bearing for
+        // correctness is the one inside locked(); this one is a cheap filter.
+        $refusal = $this->refusal($this->evaluator->evaluate($request, $current, $flags->required, $exists));
+
+        if ($refusal instanceof HttpException) {
+            throw $refusal;
+        }
+
+        // No second instanceof here: the guard at the top of this method has
+        // already thrown for a `lock` route whose strategy is not lockable, so
+        // the flag alone is enough to narrow $strategy — and re-testing it is
+        // an error PHPStan reports rather than a belt-and-braces check.
+        return $flags->lock
+            ? $this->locked($request, $next, $strategy, $current, $flags->required)
+            : $next($request);
+    }
+
+    /**
+     * Re-check the precondition against a locked row, then run the controller
+     * inside the same transaction.
+     *
+     * This is the whole of `lock` mode and the whole of design D1. If-Match on
+     * its own is check-then-write: the guard reads the current validator, and
+     * between that read and the controller's write another request can commit.
+     * Re-reading the row under SELECT … FOR UPDATE and evaluating the
+     * precondition a second time against what comes back closes that window,
+     * because from the lock until commit nothing else can change the row.
+     *
+     * Acquiring the lock without the second evaluation would preserve the race
+     * with extra steps and extra cost, which is why the two lines below are
+     * inseparable.
+     *
+     * @param  Closure(Request): Response  $next
+     */
+    private function locked(
+        Request $request,
+        Closure $next,
+        LockableValidatorStrategy $strategy,
+        ?Validator $current,
+        bool $required,
+    ): Response {
+        $target = $strategy->lockTarget($request);
+
+        if (! $target instanceof Model) {
+            // Two very different situations collapse to the same null, and the
+            // validator already in hand tells them apart. A resource that
+            // exists but is not a row is §5.5's non-database resource — a
+            // wiring error, because `lock` cannot mean anything for it. No
+            // resource at all is an ordinary create, whose protection is
+            // If-None-Match: * plus a unique constraint; a row lock has nothing
+            // to hold and wrapping the create in a transaction would buy
+            // nothing while inheriting every hazard in §5.5.
+            if ($current instanceof Validator) {
+                throw $this->unlockableTargetError($request);
+            }
+
+            return $next($request);
+        }
+
+        $connection = $target->getConnection();
+
+        try {
+            return $this->lockWait->transaction(
+                $connection,
+                (int) $this->config->get('laravel-conditional-requests.lock_timeout'),
+                function () use ($request, $next, $strategy, $target, $required): Response {
+                    $strategy->lockAndRefresh($request, $target);
+
+                    // Existence is re-asked along with the validator: a record
+                    // deleted since it was bound is forgotten from the route by
+                    // lockAndRefresh(), and the create guard has to see that
+                    // rather than the answer from before the lock.
+                    $refusal = $this->refusal($this->evaluator->evaluate(
+                        $request,
+                        $strategy->fromRequest($request),
+                        $required,
+                        $strategy->targetExists($request),
+                    ));
+
+                    if ($refusal instanceof HttpException) {
+                        // Connection::transaction() with its default of one
+                        // attempt rolls back and rethrows unchanged, so a 412
+                        // raised in here reaches the handler as the same 412 it
+                        // would have been outside — never a 500.
+                        throw $refusal;
+                    }
+
+                    return $next($request);
+                },
+            );
+        } catch (Throwable $exception) {
+            if (! $this->lockWait->caused($exception)) {
+                throw $exception;
+            }
+
+            throw new LockTimeoutException($this->message(LockTimeoutException::MESSAGE_KEY), $exception);
+        }
+    }
+
+    /**
+     * The exception an outcome deserves, or null when it passed.
+     *
+     * Shared by the evaluation before the lock and the one inside it, so the
+     * two cannot drift and a refusal issued under a lock is indistinguishable
+     * from one issued without.
+     */
+    private function refusal(PreconditionOutcome $outcome): ?HttpException
+    {
+        return match ($outcome) {
+            PreconditionOutcome::Passed => null,
+            PreconditionOutcome::Failed => new PreconditionFailedException(
                 $this->message(PreconditionFailedException::MESSAGE_KEY),
             ),
-            PreconditionOutcome::Required => throw new PreconditionRequiredException(
+            PreconditionOutcome::Required => new PreconditionRequiredException(
                 $this->message(PreconditionRequiredException::MESSAGE_KEY),
             ),
-            PreconditionOutcome::Passed => $next($request),
         };
+    }
+
+    /**
+     * The route asked for a guard that has to answer before the controller
+     * runs, and named a strategy that cannot.
+     *
+     * v0.3's message, moved into a method and otherwise unchanged. Only
+     * `required` can reach it: the `lock` check above throws first, and
+     * LockableValidatorStrategy extends the interface this one tests for.
+     */
+    private function guardStrategyError(Request $request, string $name): LogicException
+    {
+        return new LogicException(sprintf(
+            '[%s] is guarded by the conditional `required` flag, but the [%s] validator strategy '
+            .'cannot produce a validator before the controller runs, so every guarded write would '
+            .'be refused with 412. Drop the explicit strategy flag — `required` already implies '
+            .'`model` — or name a strategy implementing %s.',
+            $this->label($request),
+            $name,
+            RequestValidatorStrategy::class,
+        ));
+    }
+
+    /**
+     * The route asked to serialise on a row and the strategy cannot say which.
+     */
+    private function lockableStrategyError(Request $request, string $name): LogicException
+    {
+        return new LogicException(sprintf(
+            '[%s] is flagged `lock`, but the [%s] validator strategy cannot name a row to lock, so the '
+            .'transaction would serialise on nothing and the check-then-write race the flag exists to '
+            .'close would still be open. Drop the explicit strategy flag — `lock` already implies '
+            .'`model` — or name a strategy implementing %s.',
+            $this->label($request),
+            $name,
+            LockableValidatorStrategy::class,
+        ));
+    }
+
+    /**
+     * The strategy can name rows, and this resource is not one — design §5.5's
+     * non-database resource.
+     */
+    private function unlockableTargetError(Request $request): LogicException
+    {
+        return new LogicException(sprintf(
+            '[%s] is flagged `lock` and its resource reports a validator, but that resource is not an '
+            .'Eloquent model, so there is no row to lock and `lock` cannot mean anything for it. Remove '
+            .'the `lock` flag from this route, or bind a resource the strategy can lock.',
+            $this->label($request),
+        ));
     }
 
     /**
