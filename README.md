@@ -332,7 +332,7 @@ PATCH /articles/42
 
 The guard applies to **every** unsafe method — `POST`, `PUT`, `PATCH`, and `DELETE`. MDN's canonical mid-air-collision example is a wiki save over `POST`, so restricting it to `PATCH` would miss the documented case.
 
-`If-Match` uses **strong** comparison, as RFC 9110 §13.1.1 requires: a `W/`-prefixed token never satisfies it, and neither does a weak validator on the server side. This is not configurable — see the caveat below.
+`If-Match` uses **strong** comparison, as RFC 9110 §13.1.1 requires: a `W/`-prefixed token never satisfies it, and neither does a weak validator on the server side. That includes `W/*`, which is not a weak wildcard but a malformed field value — the wildcard is a grammar alternative to the tag list rather than an entity tag, so there is nothing for the prefix to attach to, and a malformed `If-Match` fails closed with `412`. On `If-None-Match` the same token *is* read as the wildcard, matching Symfony, because there that is the fail-closed reading; the two headers differ because the safe answer differs. None of this is configurable — see the caveat below.
 
 ### Guarding a create
 

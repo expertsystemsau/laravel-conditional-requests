@@ -152,3 +152,19 @@ it('refuses a create over a record that exists but yields no validator', functio
         ->assertOk()
         ->assertJson(['status' => 'created']);
 });
+
+it('refuses a weak prefixed If-Match wildcard', function (): void {
+    // §13.1.1's grammar has no weak wildcard: `*` is an alternative to the tag
+    // list, not an entity tag a `W/` can attach to. Fail closed, as the README
+    // has always said a `W/`-prefixed token does on this header.
+    $this->put('/articles/1', [], ['If-Match' => 'W/*'])->assertStatus(412);
+});
+
+it('keeps a weak prefixed wildcard working on the create guard', function (): void {
+    // Untouched on the other header, where matching Symfony's reading is what
+    // closed the read path's 304 existence oracle.
+    $this->put('/articles/1', [], ['If-None-Match' => 'W/*'])->assertStatus(412);
+    $this->put('/articles/999', [], ['If-None-Match' => 'W/*'])
+        ->assertOk()
+        ->assertJson(['status' => 'created']);
+});

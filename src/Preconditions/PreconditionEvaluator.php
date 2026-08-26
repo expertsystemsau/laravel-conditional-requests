@@ -82,7 +82,7 @@ final readonly class PreconditionEvaluator
         $ifNoneMatch = $this->header($request, 'If-None-Match');
 
         if ($ifNoneMatch !== null) {
-            if ($this->isWildcard($ifNoneMatch)) {
+            if ($this->isWeakComparisonWildcard($ifNoneMatch)) {
                 return $this->outcome(! $current instanceof Validator && $exists === false);
             }
 
@@ -216,26 +216,47 @@ final readonly class PreconditionEvaluator
     }
 
     /**
-     * Whether the entire field value is the wildcard.
+     * Whether the entire field value is the wildcard, read exactly as the
+     * grammar writes it.
      *
-     * The grammar is `If-Match = "*" / #entity-tag`: the wildcard is unquoted
-     * and it is the whole field value, not a member of the tag list.
+     * `If-Match = "*" / #entity-tag`: the wildcard is unquoted, unprefixed, and
+     * it is the whole field value rather than a member of the tag list.
      * werk365/etagconditionals looks for a quoted `"*"` inside the list, so a
      * spec-compliant `If-Match: *` gets a spurious 412 there — defect #3. Here
      * `"*"` is an entity tag whose opaque value happens to be an asterisk, and
      * it is compared as one.
      *
-     * The weakness prefix comes off before the test rather than after it. That
-     * order is Symfony's (Response.php:1135) and it is the correction v0.2's
-     * read-path guard had to make: nothing is a wildcard under the grammar but
-     * a bare `*`, yet Symfony drops the prefix first and then matches on the
-     * `*` left behind, so testing the raw token calls `W/*` a concrete tag.
-     * On the create guard that reading is the dangerous one — a `W/*` that
-     * matches nothing lets a second create through the only thing stopping it —
-     * and a rule that holds for one header and not the other is a rule nobody
-     * remembers, so both headers strip first.
+     * `W/*` is not this. The wildcard is a grammar alternative rather than an
+     * entity tag, so there is nothing for a weakness prefix to attach to and
+     * `W/*` is simply malformed. §13.1.1 asks for strong comparison, and the
+     * fail-closed reading of a malformed field value on the update guard is
+     * 412 — which is also what the README has always promised: a `W/`-prefixed
+     * token never satisfies If-Match. The other header reads it the other way,
+     * and deliberately: see isWeakComparisonWildcard().
      */
     private function isWildcard(string $header): bool
+    {
+        return trim($header) === '*';
+    }
+
+    /**
+     * Whether the field value is the wildcard under §13.1.2's weak comparison,
+     * where the weakness prefix comes off before the test rather than after it.
+     *
+     * That order is Symfony's (Response.php:1135) and it is the correction
+     * v0.2's read-path guard had to make. Nothing is a wildcard under the
+     * grammar but a bare `*`, yet Symfony drops the prefix first and then
+     * matches on the `*` left behind — so on this header, whatever Symfony will
+     * call a wildcard has to be one here too, or the two disagree about what
+     * matched. On the create guard the same reading is the fail-closed one: a
+     * `W/*` treated as a concrete tag matches nothing, and a create guard that
+     * matches nothing lets a second create through the only thing stopping it.
+     *
+     * If-Match cannot follow: there the strict reading is the fail-closed one,
+     * and §13.1.1's strong comparison forbids a weak token besides. The two
+     * headers differ because the safe answer differs, not by oversight.
+     */
+    private function isWeakComparisonWildcard(string $header): bool
     {
         return $this->withoutWeakness(trim($header)) === '*';
     }

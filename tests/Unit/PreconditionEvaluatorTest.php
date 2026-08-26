@@ -185,14 +185,38 @@ it('passes a weak prefixed wildcard create guard when the resource does not exis
         ->toBe(PreconditionOutcome::Passed);
 });
 
-it('treats a weak prefixed wildcard as the wildcard on If-Match too', function (): void {
+it('does not treat a weak prefixed wildcard as the wildcard on If-Match', function (): void {
+    // Amended with the v0.3 write-path sweep. This previously asserted Passed,
+    // on the reasoning that one rule for both headers is the rule people
+    // remember. But the wildcard is a grammar alternative rather than an entity
+    // tag, so `W/*` is malformed rather than weak — and §13.1.1's strong
+    // comparison makes the fail-closed reading the right one here, which is
+    // also what the README has always promised. The other header keeps
+    // Symfony's reading, where stripping first is what closed a 304 oracle.
     expect((new PreconditionEvaluator)->evaluate(guardedRequest(['If-Match' => 'W/*']), new Validator('abc'), false))
-        ->toBe(PreconditionOutcome::Passed);
+        ->toBe(PreconditionOutcome::Failed);
 });
 
 it('fails a weak prefixed If-Match wildcard when the resource does not exist', function (): void {
     expect((new PreconditionEvaluator)->evaluate(guardedRequest(['If-Match' => 'W/*']), null, false))
         ->toBe(PreconditionOutcome::Failed);
+});
+
+it('reads the same weak prefixed wildcard differently on each header', function (): void {
+    // Both answers are the fail-closed one for the guard that header drives:
+    // the update guard refuses a malformed field value, and the create guard
+    // refuses to call it a tag that matches nothing.
+    $evaluator = new PreconditionEvaluator;
+
+    expect($evaluator->evaluate(guardedRequest(['If-Match' => 'W/*']), new Validator('abc'), false))
+        ->toBe(PreconditionOutcome::Failed)
+        ->and($evaluator->evaluate(guardedRequest(['If-None-Match' => 'W/*']), new Validator('abc'), false))
+        ->toBe(PreconditionOutcome::Failed);
+});
+
+it('still accepts a bare If-Match wildcard with the weakness rule tightened', function (): void {
+    expect((new PreconditionEvaluator)->evaluate(guardedRequest(['If-Match' => '*']), new Validator('abc'), false))
+        ->toBe(PreconditionOutcome::Passed);
 });
 
 it('does not treat a wildcard inside a list as the wildcard', function (): void {
