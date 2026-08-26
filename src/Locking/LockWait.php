@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace ExpertSystems\ConditionalRequests\Locking;
 
 use Closure;
-use Illuminate\Contracts\Database\ConcurrencyErrorDetector;
 use Illuminate\Database\Connection;
+use Illuminate\Database\DetectsConcurrencyErrors;
 use Illuminate\Support\Str;
 use Throwable;
 
@@ -22,7 +22,7 @@ use Throwable;
  */
 final readonly class LockWait
 {
-    public function __construct(private ConcurrencyErrorDetector $detector) {}
+    use DetectsConcurrencyErrors;
 
     /**
      * Run $callback inside a transaction on $connection, with the lock wait
@@ -111,9 +111,11 @@ final readonly class LockWait
     /**
      * Whether this failure was the lock, rather than the query.
      *
-     * The framework's own detector covers deadlocks and serialization failures
-     * across the drivers Laravel supports, including MySQL's "Lock wait timeout
-     * exceeded". It does not cover PostgreSQL's lock_timeout, which raises
+     * The framework's own DetectsConcurrencyErrors covers deadlocks and
+     * serialization failures across the drivers Laravel supports, including
+     * MySQL's "Lock wait timeout exceeded" — and defers to a detector bound in
+     * the container where an application has bound one of its own. It does not
+     * cover PostgreSQL's lock_timeout, which raises
      * SQLSTATE 55P03 with a message the detector's list does not carry, nor SQL
      * Server's 1222 — both are checked here.
      *
@@ -123,7 +125,7 @@ final readonly class LockWait
      */
     public function caused(Throwable $exception): bool
     {
-        if ($this->detector->causedByConcurrencyError($exception)) {
+        if ($this->causedByConcurrencyError($exception)) {
             return true;
         }
 

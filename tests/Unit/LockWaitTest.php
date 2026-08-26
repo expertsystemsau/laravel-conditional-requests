@@ -5,7 +5,6 @@ declare(strict_types=1);
 use ExpertSystems\ConditionalRequests\Exceptions\LockTimeoutException;
 use ExpertSystems\ConditionalRequests\Locking\LockWait;
 use ExpertSystems\ConditionalRequests\Tests\Fixtures\FakePdoException;
-use Illuminate\Database\ConcurrencyErrorDetector;
 use Illuminate\Database\DeadlockException;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
@@ -14,7 +13,7 @@ use Symfony\Component\HttpKernel\Exception\ServiceUnavailableHttpException;
 
 function lockWaitFixture(): LockWait
 {
-    return new LockWait(new ConcurrencyErrorDetector);
+    return new LockWait;
 }
 
 function lockPdoException(string $message, string $sqlState): QueryException
