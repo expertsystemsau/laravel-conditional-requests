@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use ExpertSystems\ConditionalRequests\Validators\Validator;
+use Illuminate\Support\Carbon;
 
 it('stores a bare entity tag unchanged', function (): void {
     expect((new Validator('abc123'))->etag)->toBe('abc123');
@@ -59,3 +60,70 @@ it('rejects a tag containing a control character', function (): void {
 it('rejects a tag containing a DEL character', function (): void {
     new Validator("abc\x7f123");
 })->throws(InvalidArgumentException::class, 'An entity tag cannot contain control characters.');
+
+it('carries no modification date by default', function (): void {
+    expect((new Validator('abc123'))->lastModified)->toBeNull();
+});
+
+it('keeps a modification date it is given', function (): void {
+    $validator = new Validator('abc123', lastModified: new DateTimeImmutable('2026-08-26 12:00:00', new DateTimeZone('UTC')));
+
+    expect($validator->lastModified?->format('Y-m-d H:i:s'))->toBe('2026-08-26 12:00:00');
+});
+
+it('floors a sub second modification date to the whole second', function (): void {
+    // Last-Modified is an HTTP-date and an HTTP-date has one-second
+    // resolution, so the stored value has to be exactly what goes on the wire.
+    $validator = new Validator('abc123', lastModified: new DateTimeImmutable('2026-08-26 12:00:00.700000', new DateTimeZone('UTC')));
+
+    expect($validator->lastModified?->format('Y-m-d H:i:s.u'))->toBe('2026-08-26 12:00:00.000000');
+});
+
+it('floors rather than rounds a date past the half second', function (): void {
+    // Rounding up would advertise a modification that has not happened yet,
+    // and would hide any change landing between the two.
+    $validator = new Validator('abc123', lastModified: new DateTimeImmutable('2026-08-26 12:00:00.999999', new DateTimeZone('UTC')));
+
+    expect($validator->lastModified?->format('Y-m-d H:i:s'))->toBe('2026-08-26 12:00:00');
+});
+
+it('floors towards the earlier second before the epoch', function (): void {
+    $validator = new Validator('abc123', lastModified: new DateTimeImmutable('1969-12-31 23:59:59.500000', new DateTimeZone('UTC')));
+
+    expect($validator->lastModified?->getTimestamp())->toBe(-1)
+        ->and($validator->lastModified?->format('Y-m-d H:i:s'))->toBe('1969-12-31 23:59:59');
+});
+
+it('normalises a modification date to UTC', function (): void {
+    $validator = new Validator('abc123', lastModified: new DateTimeImmutable('2026-08-26 22:00:00', new DateTimeZone('Australia/Melbourne')));
+
+    expect($validator->lastModified?->getTimezone()->getName())->toBe('UTC')
+        ->and($validator->lastModified?->format('Y-m-d H:i:s'))->toBe('2026-08-26 12:00:00');
+});
+
+it('copies a mutable date so a later change cannot rewrite the validator', function (): void {
+    // Eloquent hands out Illuminate\Support\Carbon, which extends the mutable
+    // DateTime. readonly protects the reference, not the object behind it.
+    $date = Carbon::parse('2026-08-26 12:00:00', 'UTC');
+
+    $validator = new Validator('abc123', lastModified: $date);
+
+    $date->addDay();
+
+    expect($validator->lastModified?->format('Y-m-d H:i:s'))->toBe('2026-08-26 12:00:00');
+});
+
+it('keeps the modification date on a weak validator', function (): void {
+    $validator = new Validator('abc123', true, new DateTimeImmutable('2026-08-26 12:00:00', new DateTimeZone('UTC')));
+
+    expect($validator->weak)->toBeTrue()
+        ->and($validator->header())->toBe('W/"abc123"')
+        ->and($validator->lastModified?->format('Y-m-d H:i:s'))->toBe('2026-08-26 12:00:00');
+});
+
+it('leaves the entity tag untouched by the modification date', function (): void {
+    $validator = new Validator('"abc123"', lastModified: new DateTimeImmutable('2026-08-26 12:00:00', new DateTimeZone('UTC')));
+
+    expect($validator->etag)->toBe('abc123')
+        ->and($validator->header())->toBe('"abc123"');
+});
