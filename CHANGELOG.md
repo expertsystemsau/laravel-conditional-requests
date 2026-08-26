@@ -66,8 +66,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ### Notes
 
 - `lock` is opt-in per route and changes nothing about a route that does not carry it.
+- **`conditional:...,lock` was parsed and inert in `v0.2` through `v0.4`.** The word was reserved so the flag would parse rather than be looked up as a strategy, and nothing acted on it. It acts now — and a route that carries it alongside a strategy that cannot name a row, or that resolves no lockable record, throws a `LogicException` on every request instead of quietly behaving as it did before. A route already written as `conditional:model,lock` or `conditional:required,lock` starts locking; check any route carrying the word before upgrading.
 - A controller run under `lock` is inside a transaction. A job it dispatches runs before the commit unless `afterCommit` is set, and returning an error response commits rather than rolls back.
 - SQLite has no row locks — `lockForUpdate()` compiles to nothing there — so `lock` on SQLite gets the re-read and the re-evaluation without the exclusion.
+- SQL Server locks and re-evaluates correctly but is not sent a lock timeout, so its own default of wait-forever stands whatever `lock_timeout` says.
+- A transaction already open on the connection when the middleware runs takes ownership: this one becomes a savepoint inside it, the row stays locked until the outer commit, and `lock_timeout` is not applied.
 
 ## v0.1.0
 
