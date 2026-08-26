@@ -150,8 +150,12 @@ return [
     | defaults to 0, which means wait forever.
     |
     | Applied per request on PostgreSQL (SET LOCAL, transaction-scoped) and on
-    | MySQL / MariaDB (SET SESSION, restored afterwards). Other drivers have no
-    | equivalent and ignore it; sqlite has no row locks at all.
+    | MySQL / MariaDB (SET SESSION, restored afterwards). Other drivers ignore
+    | it; sqlite has no row locks at all. SQL Server does have an equivalent —
+    | SET LOCK_TIMEOUT — but this package does not issue it, so SQL Server's own
+    | default of -1, wait forever, applies unless you set it on the connection
+    | yourself. A guarded write there pins a worker for as long as the competing
+    | transaction holds the row, and answers no 503.
     |
     | This key is flat rather than nested under a "lock" array on purpose:
     | mergeConfigFrom() merges only top-level keys, so a published config file

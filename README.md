@@ -486,7 +486,7 @@ Your controller is handed the freshly locked instance, not the one route-model b
 - **The row stays locked for as long as your controller takes.** Keep guarded routes lean. A slow guarded route is a queue of waiting writers.
 - **A response is not a rollback.** Returning a `500` from your controller commits the transaction, exactly as it would inside a hand-written `DB::transaction()`. Throw if you want the work discarded.
 - **Only the target row is locked, on only that record's connection.** Related rows your controller writes, and writes it makes through a different connection, are outside both.
-- **A `503` means the row was busy.** If the lock cannot be taken within `lock_timeout` seconds the request is answered `503 Service Unavailable` with a `Retry-After`, and nothing is written. Catch `ExpertSystems\ConditionalRequests\Exceptions\LockTimeoutException` in your handler to answer differently.
+- **A `503` means the row was busy.** If the lock cannot be taken within `lock_timeout` seconds the request is answered `503 Service Unavailable` with a `Retry-After`, and nothing is written. Catch `ExpertSystems\ConditionalRequests\Exceptions\LockTimeoutException` in your handler to answer differently. On SQL Server there is no such bound unless you set one on the connection yourself — see [`lock_timeout`](#lock_timeout) — so a guarded write there waits for as long as the competing transaction holds the row.
 
 #### `lock_timeout`
 
@@ -494,7 +494,9 @@ Your controller is handed the freshly locked instance, not the one route-model b
 'lock_timeout' => 5,
 ```
 
-Seconds to wait for the row before giving up with `503`. Applied per request on PostgreSQL (`SET LOCAL lock_timeout`, transaction-scoped) and on MySQL / MariaDB (`SET SESSION innodb_lock_wait_timeout`, restored afterwards). Other drivers have no equivalent and ignore it.
+Seconds to wait for the row before giving up with `503`. Applied per request on PostgreSQL (`SET LOCAL lock_timeout`, transaction-scoped) and on MySQL / MariaDB (`SET SESSION innodb_lock_wait_timeout`, restored afterwards). Other drivers ignore it.
+
+SQL Server is the one driver with an equivalent this package does not use: it has `SET LOCK_TIMEOUT`, but the package never issues it, so SQL Server's own default of `-1` — wait forever — applies whatever you put in this key. Set it on the connection yourself if you want a bound there. A guarded write on `sqlsrv` otherwise holds its PHP worker for as long as the competing transaction holds the row, and no `503` is ever produced by the wait. A lock error SQL Server *does* raise, `1222`, is still recognised and still answered `503`.
 
 Set `0` to leave your server's own setting alone — but note that PostgreSQL's `lock_timeout` defaults to `0`, which means wait forever.
 
@@ -503,7 +505,7 @@ Set `0` to leave your server's own setting alone — but note that PostgreSQL's 
 `lock` has nothing to hold on a create: there is no row yet. A `POST` to a collection under `conditional:required,lock` behaves exactly as it does under `conditional:required` — `If-None-Match: *` guards it and no transaction is opened. Back that up with a unique constraint; a package cannot.
 
 > [!WARNING]
-> `lock` needs a database that implements row locking. On MySQL, MariaDB, PostgreSQL, and SQL Server it does what it says. **On SQLite it does not**: `lockForUpdate()` compiles to nothing there, so the re-read and the re-evaluation still happen and still catch a committed competitor, but there is no lock and the window between the re-read and the write is left open.
+> `lock` needs a database that implements row locking. On MySQL, MariaDB, and PostgreSQL it does what it says. On SQL Server it locks and re-evaluates correctly, but `lock_timeout` is not applied — the wait is unbounded unless you bound it yourself. **On SQLite it does not lock at all**: `lockForUpdate()` compiles to nothing there, so the re-read and the re-evaluation still happen and still catch a committed competitor, but there is no lock and the window between the re-read and the write is left open.
 
 ### Requirements and caveats for guarded routes
 
