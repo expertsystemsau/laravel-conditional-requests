@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use ExpertSystems\ConditionalRequests\ConditionalRequests;
 use ExpertSystems\ConditionalRequests\Contracts\ProvidesConditionalValidator;
 use ExpertSystems\ConditionalRequests\Tests\Fixtures\Article;
 use ExpertSystems\ConditionalRequests\Tests\Fixtures\Note;
@@ -9,6 +10,7 @@ use ExpertSystems\ConditionalRequests\Validators\ModelStrategy;
 use ExpertSystems\ConditionalRequests\Validators\Validator;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Route;
+use Illuminate\Support\Carbon;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
@@ -202,4 +204,63 @@ it('leaves the read path first wins rule alone on the same route', function (): 
 
     expect((new ModelStrategy)->fromRequest($request)?->etag)
         ->toBe($article->conditionalValidator($request)?->etag);
+});
+
+/**
+ * The existing fixtureArticleFor() helper pins updated_at to a fixed past
+ * instant, so the clock has to be parked after it for a date to be published
+ * at all — see the one-second rule in HasConditionalValidator.
+ */
+function afterTheArticleWasWritten(): void
+{
+    test()->travelTo(Carbon::parse('2026-08-25 10:00:05', 'UTC'));
+}
+
+it('carries the models modification date through to the validator', function (): void {
+    afterTheArticleWasWritten();
+
+    $validator = (new ModelStrategy)->fromRequest(
+        routedRequest('/articles/1', 'articles/{article}', ['article' => fixtureArticleFor(1)]),
+    );
+
+    expect($validator?->lastModified?->format('Y-m-d H:i:s'))->toBe('2026-08-25 10:00:00');
+});
+
+it('keeps the modification date when it weakens a tag', function (): void {
+    // The rebuild that applies `weak` must not drop the date on the way past.
+    afterTheArticleWasWritten();
+
+    $validator = (new ModelStrategy(weak: true))->fromRequest(
+        routedRequest('/articles/1', 'articles/{article}', ['article' => fixtureArticleFor(1)]),
+    );
+
+    expect($validator?->weak)->toBeTrue()
+        ->and($validator?->lastModified?->format('Y-m-d H:i:s'))->toBe('2026-08-25 10:00:00');
+});
+
+it('drops the modification date when the strategy is told not to publish one', function (): void {
+    afterTheArticleWasWritten();
+
+    $validator = (new ModelStrategy(lastModified: false))->fromRequest(
+        routedRequest('/articles/1', 'articles/{article}', ['article' => fixtureArticleFor(1)]),
+    );
+
+    expect($validator?->etag)->not->toBeNull()
+        ->and($validator?->lastModified)->toBeNull();
+});
+
+it('publishes modification dates by default', function (): void {
+    expect(config('laravel-conditional-requests.last_modified'))->toBeTrue();
+});
+
+it('builds the model strategy from the last_modified config key', function (): void {
+    afterTheArticleWasWritten();
+
+    config()->set('laravel-conditional-requests.last_modified', false);
+
+    $strategy = app(ConditionalRequests::class)->strategy('model');
+    $request = routedRequest('/articles/1', 'articles/{article}', ['article' => fixtureArticleFor(1)]);
+
+    expect($strategy)->toBeInstanceOf(ModelStrategy::class)
+        ->and($strategy->fromResponse($request, new Response)?->lastModified)->toBeNull();
 });

@@ -23,7 +23,12 @@ use Symfony\Component\HttpFoundation\Response;
  */
 final readonly class ModelStrategy implements RequestValidatorStrategy
 {
-    public function __construct(private bool $weak = false) {}
+    /**
+     * @param  bool  $weak  emit weak tags, per the `weak` config key
+     * @param  bool  $lastModified  publish the record's modification date, per
+     *                              the `last_modified` config key
+     */
+    public function __construct(private bool $weak = false, private bool $lastModified = true) {}
 
     public function fromRequest(Request $request): ?Validator
     {
@@ -33,7 +38,7 @@ final readonly class ModelStrategy implements RequestValidatorStrategy
             return null;
         }
 
-        return $this->weaken($model->conditionalValidator($request));
+        return $this->conform($model->conditionalValidator($request));
     }
 
     /**
@@ -149,16 +154,31 @@ final readonly class ModelStrategy implements RequestValidatorStrategy
     }
 
     /**
-     * Model validators are strong by default (design §4). The `weak` config key
-     * opts a deployment out of the guarantee on read-only routes; it can only
-     * ever weaken a tag, never strengthen one the model marked weak itself.
+     * Apply this strategy's settings to whatever the model handed back.
+     *
+     * Model validators are strong and dated by default. The `weak` and
+     * `last_modified` config keys opt a deployment out of each guarantee; both
+     * can only ever take something away, never add one the model withheld —
+     * this strategy cannot strengthen a tag the model marked weak, and it
+     * cannot invent a date the model declined to publish.
+     *
+     * The rebuild is in one place on purpose: it is the only path on which a
+     * validator is reconstructed, and reconstructing it a field at a time is
+     * how the modification date would get dropped by accident.
      */
-    private function weaken(?Validator $validator): ?Validator
+    private function conform(?Validator $validator): ?Validator
     {
-        if (! $validator instanceof Validator || ! $this->weak || $validator->weak) {
+        if (! $validator instanceof Validator) {
+            return null;
+        }
+
+        $weak = $this->weak || $validator->weak;
+        $lastModified = $this->lastModified ? $validator->lastModified : null;
+
+        if ($weak === $validator->weak && $lastModified === $validator->lastModified) {
             return $validator;
         }
 
-        return new Validator($validator->etag, weak: true);
+        return new Validator($validator->etag, $weak, $lastModified);
     }
 }

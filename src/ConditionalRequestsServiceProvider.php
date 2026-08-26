@@ -47,6 +47,7 @@ class ConditionalRequestsServiceProvider extends ServiceProvider
 
             return new ModelStrategy(
                 (bool) $config->get('laravel-conditional-requests.weak'),
+                (bool) $config->get('laravel-conditional-requests.last_modified'),
             );
         });
 

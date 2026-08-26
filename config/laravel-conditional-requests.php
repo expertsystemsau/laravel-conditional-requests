@@ -74,6 +74,26 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Last-Modified
+    |--------------------------------------------------------------------------
+    |
+    | Whether model-derived validators publish the record's modification date
+    | alongside the ETag, so a client can revalidate a read with
+    | If-Modified-Since and guard a write with If-Unmodified-Since.
+    |
+    | Set this to false to keep the whole family out of the conversation:
+    | responses then carry no Last-Modified, an If-Modified-Since can never
+    | produce a 304, and a write offering only If-Unmodified-Since is refused
+    | with 412 rather than proceeding unguarded. A date is published only once
+    | the second holding the change has elapsed, so a record that has just
+    | changed carries its ETag alone until that second is over.
+    |
+    */
+
+    'last_modified' => true,
+
+    /*
+    |--------------------------------------------------------------------------
     | Maximum Response Size
     |--------------------------------------------------------------------------
     |
