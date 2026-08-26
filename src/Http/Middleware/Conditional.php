@@ -179,7 +179,21 @@ final readonly class Conditional
             // the exact failure this package exists to prevent — the route
             // looks guarded, answers 200, and the client believes its
             // optimistic-concurrency check was honoured. Fail closed instead.
-            if ($this->evaluator->supplied($request)) {
+            //
+            // Only once there is a route to speak for. Under kernel-global
+            // placement this runs ahead of the router: there are no flags to
+            // read, so strategyName() can only return the configured default —
+            // `body` out of the box — and refusing here would refuse on behalf
+            // of a route that has not been chosen yet, including the
+            // `conditional:required` one whose own guard would then never run.
+            // Every guarded write in the application would answer 412, the
+            // ones carrying the correct If-Match among them: the inverted
+            // guard this refusal exists to prevent, applied globally. The
+            // global instance defers and the route-level one decides. Under
+            // route or group placement the route is resolved, the strategy
+            // named here is the one that will actually be asked, and a
+            // precondition it cannot evaluate is still refused.
+            if ($request->route() !== null && $this->evaluator->supplied($request)) {
                 throw new PreconditionFailedException(
                     $this->message(PreconditionFailedException::MESSAGE_KEY),
                 );

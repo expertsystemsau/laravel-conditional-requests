@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use ExpertSystems\ConditionalRequests\Http\Middleware\Conditional;
 use ExpertSystems\ConditionalRequests\Tests\Fixtures\Article;
+use ExpertSystems\ConditionalRequests\Tests\Fixtures\Probe;
 use Illuminate\Contracts\Http\Kernel;
 use Illuminate\Routing\Middleware\SubstituteBindings;
 use Illuminate\Support\Facades\Route;
@@ -159,6 +160,67 @@ it('lets an unguarded write through under kernel global placement', function ():
     $this->put('/articles/1')
         ->assertOk()
         ->assertJson(['title' => 'Hello']);
+});
+
+it('defers to the route level guard under kernel global placement', function (): void {
+    // The default strategy — `body` — cannot produce a validator before the
+    // controller runs, and a globally pushed instance runs ahead of the router
+    // where there are no flags to read, so it always resolves that default.
+    // Refusing a precondition there refuses it on behalf of a route that has
+    // not been chosen yet: every `conditional:required` write in the
+    // application answers 412 without its own guard ever running, the writes
+    // carrying the correct If-Match included. Registering `conditional`
+    // globally for read-path ETags must leave those guards working.
+    expect(config('laravel-conditional-requests.strategy'))->toBe('body');
+
+    app(Kernel::class)->pushMiddleware(Conditional::class);
+
+    $runs = 0;
+
+    Route::middleware([SubstituteBindings::class, 'conditional:model'])
+        ->get('/articles/{article}', fn (Article $article): array => ['title' => $article->title]);
+
+    Route::middleware([SubstituteBindings::class, 'conditional:required'])
+        ->put('/articles/{article}', function (Article $article) use (&$runs): array {
+            $runs++;
+
+            return ['title' => $article->title];
+        });
+
+    $etag = (string) $this->get('/articles/1')->headers->get('ETag');
+
+    $this->put('/articles/1', [], ['If-Match' => $etag])
+        ->assertOk()
+        ->assertJson(['title' => 'Hello']);
+
+    expect($runs)->toBe(1);
+});
+
+it('refuses a stale If-Match from the route level guard under kernel global placement', function (): void {
+    // The other half: deferring is not passing the write through unguarded.
+    // The probe middleware is what tells the two 412s apart — it sits between
+    // the global instance and the route's own guard, so it runs only if the
+    // global one deferred rather than refusing on the route's behalf.
+    expect(config('laravel-conditional-requests.strategy'))->toBe('body');
+
+    app(Kernel::class)->pushMiddleware(Conditional::class);
+
+    $runs = 0;
+    Probe::$reached = 0;
+
+    Route::middleware([Probe::class, SubstituteBindings::class, 'conditional:required'])
+        ->put('/articles/{article}', function (Article $article) use (&$runs): array {
+            $runs++;
+            $article->update(['title' => 'Clobbered']);
+
+            return ['title' => $article->title];
+        });
+
+    $this->put('/articles/1', [], ['If-Match' => '"stale-tag"'])->assertStatus(412);
+
+    expect(Probe::$reached)->toBe(1)
+        ->and($runs)->toBe(0)
+        ->and(Article::query()->findOrFail(1)->title)->toBe('Hello');
 });
 
 it('refuses an If-Match when conditional runs before route model binding', function (): void {
